@@ -189,32 +189,30 @@ function rowsFromMatrix(matrix) {
   if (hi >= 0) { cols = matrix[hi].map(c => String(c === null || c === undefined ? '' : c).trim().toLowerCase()); body = matrix.slice(hi + 1); }
   else { cols = TILDA_COLS; body = matrix; }
   const idx = {}; cols.forEach((c, i) => { if (c && !(c in idx)) idx[c] = i; });
-  const need = ['created', 'name', 'product', 'amount'];
+  const need = ['created', 'name', 'product', 'amount', 'paymentid'];
   const missing = need.filter(k => !(k in idx));
   if (missing.length) return { error: 'В файле нет колонок: ' + missing.join(', ') };
   const out = [];
+  let skipped = 0;
   body.forEach(r => {
     const g = k => { const v = r[idx[k]]; return (v === undefined || v === null) ? '' : v; };
     if (!String(g('created')).trim() && !String(g('name')).trim()) return;
     const name = String(g('name')).trim();
     if (!name) return;
+    // платёж прошёл, только если заполнен paymentid; остальные строки (брошенные корзины, неудачные оплаты) пропускаем
+    const pid = String(g('paymentid')).replace('custom.atolpay:', '').trim();
+    if (!pid) { skipped++; return; }
     const created = normDate(g('created'));
     const pr = String(g('product'));
     const am = safeNum(g('amount'));
-    // статус: колонка tilda_status; при сдвиге колонок в новых строках 'sent' может оказаться правее
-    const stRaw = String(g('tilda_status')).trim().toLowerCase();
-    let ok = PAID_WORDS.indexOf(stRaw) >= 0;
-    if (!ok) { const after = idx['tilda_status'] !== undefined ? r.slice(idx['tilda_status'], idx['tilda_status'] + 3) : r.slice(14, 18); ok = after.some(c => PAID_WORDS.indexOf(String(c).trim().toLowerCase()) >= 0); }
-    const pid = String(g('paymentid')).replace('custom.atolpay:', '').trim();
-    const oid = String(g('tilda_orderid')).trim();
-    const id = pid || oid || (created + '|' + name + '|' + am);
+    const id = pid;
     const maName = String(g('ma_name')).trim();
     out.push({
       id, c: created, n: name, pa: (maName && maName !== name) ? maName : '', em: String(g('email')).trim(), ph: String(g('phone')).trim(),
-      pr, am, pm: safeNum(g('prodamount')), di: safeNum(g('discount')), pc: String(g('promocode')).trim(), ok: ok ? 1 : 0,
+      pr, am, pm: safeNum(g('prodamount')), di: safeNum(g('discount')), pc: String(g('promocode')).trim(), ok: 1,
     });
   });
-  return { rows: out };
+  return { rows: out, skipped };
 }
 
 function parseCSV(text) {

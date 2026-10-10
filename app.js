@@ -64,11 +64,11 @@ async function handleFile(file) {
   try {
     const res = rowsFromMatrix(await readFile(file));
     if (res.error) throw new Error(res.error + '. Загрузи выгрузку заказов из Tilda целиком, вместе со строкой заголовков.');
-    if (!res.rows.length) throw new Error('В файле не нашлось ни одного платежа.');
+    if (!res.rows.length) throw new Error('В файле нет строк с заполненным paymentid' + (res.skipped ? ' (пропущено строк без него: ' + res.skipped + ')' : '') + '. Берутся только прошедшие платежи.');
     if (rosterDirty) { clearTimeout(rosterTimer); await saveRoster(); }
     const m = await api('POST', '/api/payments/import', { rows: res.rows });
     await loadState();
-    let html = '<div class="banner ok"><b>Выгрузка загружена</b><span>Добавлено новых платежей: ' + m.added + ', обновлено: ' + m.updated + ', уже были: ' + m.same + (m.notPaid ? ', без оплаты в Tilda: ' + m.notPaid : '') + '.</span>';
+    let html = '<div class="banner ok"><b>Выгрузка загружена</b><span>Добавлено новых платежей: ' + m.added + ', обновлено: ' + m.updated + ', уже были: ' + m.same + (res.skipped ? '. Пропущено строк без paymentid (оплата не прошла): ' + res.skipped : '') + '.</span>';
     if (m.fresh.length) html += '<span>Новые ученики (' + m.fresh.length + '): ' + m.fresh.map(esc).join(', ') + '. Заполни им начало занятий, дни и занятий в неделю на вкладке «Ученики», иначе план по ним не посчитается.</span>';
     html += '</div>';
     $('notice').innerHTML = html;
@@ -255,7 +255,7 @@ function renderPays(view) {
     '<input type="search" id="pq" placeholder="Найти по ученику" aria-label="Найти по ученику" value="' + esc(S.pq) + '"></div><div class="scroll"><table><thead><tr><th class="l">Дата</th><th class="l">Ученик</th><th class="l">Плательщик</th><th class="l">Тип занятий</th><th class="l">Месяц</th><th>Занятий</th><th>Сумма</th><th class="l">Промокод</th><th class="l">Статус</th><th></th></tr></thead><tbody>';
   h += f.map(x => { const r = x.r, pp = parseProduct(r.pr); return '<tr data-id="' + esc(r.id) + '"><td class="l num">' + esc(fmtDate(r.c)) + ' ' + esc((r.c || '').slice(11, 16)) + '</td><td class="l">' + esc(r.n) + (known.has(r.n) ? '' : ' <span class="pill warn">не в списке</span>') + '</td><td class="l" style="color:var(--ink2)">' + esc(r.pa) + '</td><td class="l">' + esc(pp.type || '—') + '</td><td class="l">' + esc(pp.month || '—') + '</td><td class="num">' + (pp.lessons || '<span class="pill warn">не распознано</span>') + '</td><td class="num">' + rub(safeNum(r.am) || 0) + '</td><td class="l">' + esc(r.pc) + '</td><td class="l">' + (r.ok ? '<span class="pill good">оплачено</span>' : '<span class="pill warn">без оплаты</span>') + '</td><td><button class="btn ghost small" data-del type="button" aria-label="Удалить платёж">Удалить</button></td></tr>'; }).join('') || '<tr><td colspan="10" style="text-align:center;color:var(--muted)">Ничего не найдено</td></tr>';
   h += '</tbody></table></div>' + (total > f.length ? '<p class="note" style="margin-top:10px">Показано ' + f.length + ' из ' + total + '. <button class="btn ghost small" id="allp" type="button">Показать все</button></p>' : '') +
-    '<p class="note" style="margin-top:10px">Повторная загрузка той же выгрузки платежи не дублирует: платёж узнаётся по номеру заказа. Если статус платежа в Tilda изменился, при новой загрузке он обновится.</p></section>';
+    '<p class="note" style="margin-top:10px">Повторная загрузка той же выгрузки платежи не дублирует: платёж узнаётся по номеру (paymentid). Из выгрузки берутся только строки с заполненным paymentid.</p></section>';
   view.innerHTML = h;
   view.querySelectorAll('[data-pf]').forEach(c => c.onclick = () => { S.pf = c.dataset.pf; S.showAllPays = false; renderPays(view); });
   const pq = $('pq'); pq.addEventListener('change', e => { S.pq = e.target.value.trim().toLowerCase(); renderPays(view); });

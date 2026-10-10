@@ -58,11 +58,24 @@ test('CSV из Tilda: точка с запятой, BOM, статус и дед�
   assert.ok(db.students.length > 0);
 });
 
-test('сдвиг колонок: статус sent правее заголовка tilda_status', () => {
-  const header = ['created', 'name', 'product', 'amount', 'tilda_status', 'formid'];
-  const row = ['2026-10-01 10:00:00', 'Ученик', 'Оплата уроков (Тип занятий: Разовое занятие , Месяц: Октябрь 2026) - 1x1300 = 1300', '1300', '', 'sent'];
-  const res = core.rowsFromMatrix([header, row]);
-  assert.equal(res.rows[0].ok, 1);
+test('берутся только строки с заполненным paymentid', () => {
+  const header = ['created', 'name', 'product', 'amount', 'tilda_status', 'paymentid'];
+  const prod = 'Оплата уроков (Тип занятий: Разовое занятие , Месяц: Октябрь 2026) - 1x1300 = 1300';
+  const res = core.rowsFromMatrix([
+    header,
+    ['2026-10-01 10:00:00', 'Ученик А', prod, '1300', 'sent', 'custom.atolpay:123'],
+    ['2026-10-01 11:00:00', 'Ученик Б', prod, '1300', 'sent', ''],          // нет paymentid: оплата не прошла
+    ['2026-10-01 12:00:00', 'Ученик В', prod, '1300', '', 'custom.atolpay:456'],  // статус пустой, но paymentid есть: оплачено
+  ]);
+  assert.equal(res.rows.length, 2);
+  assert.equal(res.skipped, 1);
+  assert.deepEqual(res.rows.map(r => r.id), ['123', '456']);
+  assert.ok(res.rows.every(r => r.ok === 1));
+});
+
+test('без колонки paymentid файл не принимается', () => {
+  const res = core.rowsFromMatrix([['created', 'name', 'product', 'amount'], ['2026-10-01', 'А', 'x', '1']]);
+  assert.match(res.error, /paymentid/);
 });
 
 test('проверка расписания подсказывает, что не так', () => {
