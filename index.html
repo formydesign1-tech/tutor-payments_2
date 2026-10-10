@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Учёт оплат репетитора</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="wrap" id="login" hidden>
+    <div class="login card">
+      <h1>Учёт оплат репетитора</h1>
+      <form id="loginform">
+        <label class="fld" for="pw">Пароль</label>
+        <input type="password" id="pw" autocomplete="current-password" required>
+        <button class="btn" type="submit">Войти</button>
+        <div class="status err" id="loginerr" role="alert"></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="wrap" id="app" hidden>
+    <header>
+      <div>
+        <h1>Учёт оплат репетитора</h1>
+        <div class="asof" id="asof"></div>
+      </div>
+      <div class="bar">
+        <label class="fld" for="repdate">Отчёт на <input type="date" id="repdate"></label>
+        <label class="fld" for="mode">Режим
+          <select id="mode"><option value="1">Занятия до даты</option><option value="0">Месяц целиком</option></select>
+        </label>
+        <button class="btn" id="upbtn" type="button">Загрузить выгрузку Tilda</button>
+        <input type="file" id="file" accept=".xlsx,.xls,.csv,.txt" hidden>
+      </div>
+    </header>
+    <div class="status" id="status" role="status"></div>
+    <div id="notice"></div>
+
+    <div class="tabs" role="tablist" aria-label="Разделы">
+      <button role="tab" id="t-summary" data-tab="summary" aria-selected="true">Сводка</button>
+      <button role="tab" id="t-students" data-tab="students" aria-selected="false">Ученики</button>
+      <button role="tab" id="t-pays" data-tab="pays" aria-selected="false">Платежи</button>
+    </div>
+    <main id="view"></main>
+
+    <footer class="menu">
+      <a class="linkbtn" href="/api/export">Скачать резервную копию</a>
+      <button class="linkbtn" id="restorebtn" type="button">Восстановить из копии</button>
+      <input type="file" id="restorefile" accept=".json,application/json" hidden>
+      <button class="linkbtn" id="logout" type="button">Выйти</button>
+    </footer>
+  </div>
+  <div class="tip" id="tip" role="status"></div>
+
+  <script src="/core.js"></script>
+  <script src="/vendor/xlsx.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
