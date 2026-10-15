@@ -143,7 +143,7 @@ function renderSummary(view) {
   // таблица учеников
   h += '<section class="card"><h2>Ученики</h2><div class="controls">' +
     [['all', 'Все'], ['owed', 'Нужно доплатить'], ['plus', 'Оплачено вперёд']].map(([f, n]) => '<button class="chip" data-f="' + f + '" aria-pressed="' + (S.filter === f) + '">' + n + '</button>').join('') +
-    '<input type="search" id="q" placeholder="Найти ученика" aria-label="Найти ученика" value="' + esc(S.q) + '"></div><div class="scroll" id="st"></div>' +
+    '<input type="search" id="q" placeholder="Найти по имени или нику" aria-label="Найти ученика" value="' + esc(S.q) + '"></div><div class="scroll" id="st"></div>' +
     '<p class="note" style="margin:10px 0 0">Баланс: оплачено минус план с начала занятий до месяца отчёта. Плюс значит оплата вперёд, минус значит долг. Колонки «Нужно доплатить» считаются по неоплаченным занятиям каждого месяца и могут не совпадать с балансом, если деньги внесены вперёд на другие месяцы.</p></section>';
   view.innerHTML = h;
   bindDebtCard();
@@ -193,16 +193,16 @@ function pill(b) { if (b < 0) return '<span class="pill bad">▼ долг ' + ru
 
 function drawStudents(M, dm) {
   const cell = v => '<td class="num' + (v ? '' : ' zero') + '">' + (v ? rub(v) : '—') + '</td>';
-  const cols = [['name', 'Ученик', 'l'], ['start', 'Начало', ''], ['planSum', 'План', ''], ['paid', 'Оплачено', ''], ['balance', 'Баланс', '']].concat(dm.map(m => ['o' + m, MONTHS[m].name, ''])).concat([['owedTotal', 'Всего доплатить', '']]);
-  const val = (r, k) => k === 'name' ? r.s.name.toLowerCase() : k === 'start' ? (r.s.start || '') : k === 'planSum' ? r.planSum : k[0] === 'o' && k !== 'owedTotal' ? r.owedR[+k.slice(1)] : r[k];
-  let rows = M.rows.filter(r => (!S.q || r.s.name.toLowerCase().includes(S.q)) && (S.filter === 'all' || (S.filter === 'owed' && r.owedTotal > 0) || (S.filter === 'plus' && r.balance > 0)));
+  const cols = [['name', 'Ученик', 'l'], ['tgName', 'Имя для бота', 'l'], ['start', 'Начало', ''], ['planSum', 'План', ''], ['paid', 'Оплачено', ''], ['balance', 'Баланс', '']].concat(dm.map(m => ['o' + m, MONTHS[m].name, ''])).concat([['owedTotal', 'Всего доплатить', '']]);
+  const val = (r, k) => k === 'name' ? r.s.name.toLowerCase() : k === 'tgName' ? String(r.s.tgName || '').toLowerCase() : k === 'start' ? (r.s.start || '') : k === 'planSum' ? r.planSum : k[0] === 'o' && k !== 'owedTotal' ? r.owedR[+k.slice(1)] : r[k];
+  let rows = M.rows.filter(r => (!S.q || (r.s.name + ' ' + (r.s.tgName || '') + ' ' + (r.s.tg || '')).toLowerCase().includes(S.q)) && (S.filter === 'all' || (S.filter === 'owed' && r.owedTotal > 0) || (S.filter === 'plus' && r.balance > 0)));
   rows.sort((a, b) => { const x = val(a, S.sortK), y = val(b, S.sortK); return (x > y ? 1 : x < y ? -1 : 0) * S.sortDir; });
   const head = '<thead><tr>' + cols.map(([k, n, c]) => '<th class="' + c + '" aria-sort="' + (S.sortK === k ? (S.sortDir > 0 ? 'ascending' : 'descending') : 'none') + '"><button data-k="' + k + '" style="all:unset;cursor:pointer">' + n + (S.sortK === k ? (S.sortDir > 0 ? ' ↑' : ' ↓') : '') + '</button></th>').join('') + '</tr></thead>';
-  const body = rows.map(r => '<tr><td class="l">' + esc(r.s.name) + (r.active ? '' : ' <span class="pill eq">' + esc(r.s.status) + '</span>') + (r.check && r.active ? ' <span class="pill warn" title="' + esc(r.check) + '">расписание</span>' : '') + '</td><td class="num">' + esc(fmtDate(r.s.start) || '—') + '</td>' + cell(r.planSum) + cell(r.paid) + '<td>' + pill(r.balance) + '</td>' + dm.map(m => cell(r.owedR[m])).join('') + '<td class="num' + (r.owedTotal ? '' : ' zero') + '">' + (r.owedTotal ? '<b>' + rub(r.owedTotal) + '</b>' : '—') + '</td></tr>').join('') || '<tr><td colspan="' + cols.length + '" style="text-align:center;color:var(--muted)">Никого не найдено</td></tr>';
+  const body = rows.map(r => '<tr><td class="l">' + esc(r.s.name) + (r.active ? '' : ' <span class="pill eq">' + esc(r.s.status) + '</span>') + (r.check && r.active ? ' <span class="pill warn" title="' + esc(r.check) + '">расписание</span>' : '') + '</td><td class="l">' + esc(r.s.tgName || '') + '</td><td class="num">' + esc(fmtDate(r.s.start) || '—') + '</td>' + cell(r.planSum) + cell(r.paid) + '<td>' + pill(r.balance) + '</td>' + dm.map(m => cell(r.owedR[m])).join('') + '<td class="num' + (r.owedTotal ? '' : ' zero') + '">' + (r.owedTotal ? '<b>' + rub(r.owedTotal) + '</b>' : '—') + '</td></tr>').join('') || '<tr><td colspan="' + cols.length + '" style="text-align:center;color:var(--muted)">Никого не найдено</td></tr>';
   const sm = k => rows.reduce((a, r) => a + (k === 'planSum' ? r.planSum : k === 'paid' ? r.paid : k === 'balance' ? r.balance : k === 'owedTotal' ? r.owedTotal : r.owedR[+k.slice(1)]), 0);
-  const foot = '<tfoot><tr><td class="l">Итого (' + rows.length + ')</td><td></td>' + ['planSum', 'paid', 'balance'].map(k => '<td class="num">' + rub(sm(k)) + '</td>').join('') + dm.map(m => '<td class="num">' + rub(sm('o' + m)) + '</td>').join('') + '<td class="num">' + rub(sm('owedTotal')) + '</td></tr></tfoot>';
+  const foot = '<tfoot><tr><td class="l">Итого (' + rows.length + ')</td><td></td><td></td>' + ['planSum', 'paid', 'balance'].map(k => '<td class="num">' + rub(sm(k)) + '</td>').join('') + dm.map(m => '<td class="num">' + rub(sm('o' + m)) + '</td>').join('') + '<td class="num">' + rub(sm('owedTotal')) + '</td></tr></tfoot>';
   const el = $('st'); el.innerHTML = '<table>' + head + '<tbody>' + body + '</tbody>' + foot + '</table>';
-  el.querySelectorAll('th button').forEach(b => b.onclick = () => { const k = b.dataset.k; if (S.sortK === k) S.sortDir *= -1; else { S.sortK = k; S.sortDir = (k === 'name' || k === 'start') ? 1 : -1; } drawStudents(M, dm); });
+  el.querySelectorAll('th button').forEach(b => b.onclick = () => { const k = b.dataset.k; if (S.sortK === k) S.sortDir *= -1; else { S.sortK = k; S.sortDir = (k === 'name' || k === 'tgName' || k === 'start') ? 1 : -1; } drawStudents(M, dm); });
 }
 
 /* ---------- выгрузка должников для бота ---------- */
