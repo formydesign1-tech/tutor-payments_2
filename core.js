@@ -55,22 +55,92 @@ function scheduleCheck(s) {
   return '';
 }
 
-function lessonsIn(s, fl, ms, meEff) {
-  const st = parseISO(s.start);
-  if (st === null) return 0;
-  const S = Math.max(ms, st);
+/** Занятия в окне дат [S, E] (числа дней) по набору дней недели fl и числу занятий в неделю wk. */
+function countLessons(fl, wk, S, E) {
+  if (E < S) return 0;
   const nd = fl.reduce((a, b) => a + b, 0);
-  const wk = safeNum(s.perWeek);
   if (nd > 0) {
     let cal = 0;
     fl.forEach((on, i) => {
       if (!on) return;
       const f = S + ((((i + 1) - wd(S)) % 7) + 7) % 7;
-      if (f <= meEff) cal += Math.floor((meEff - f) / 7) + 1;
+      if (f <= E) cal += Math.floor((E - f) / 7) + 1;
     });
     return Math.round(cal * ((wk !== null && wk < nd) ? wk / nd : 1));
   }
-  return wk !== null ? Math.round(wk * Math.max(0, meEff - S + 1) / 7) : 0;
+  return wk !== null ? Math.round(wk * Math.max(0, E - S + 1) / 7) : 0;
+}
+const flagsOf = text => { const low = String(text || '').toLowerCase(); return DAYS.map(d => (low.indexOf(d.toLowerCase()) >= 0 ? 1 : 0)); };
+
+/**
+ * Расписание ученика по периодам. Базовое расписание действует всегда, кроме периодов из s.changes:
+ * { from, to (необязательно), kind: 'off' | 'sched', days, perWeek, price }.
+ * Период длится до даты «по» или до начала следующего изменения; если «по» нет и следующего нет, то навсегда.
+ */
+function buildSegments(s, baseFl) {
+  const base = { fl: baseFl, wk: safeNum(s.perWeek), price: safeNum(s.price) || 0, off: false };
+  const list = (Array.isArray(s.changes) ? s.changes : []).map(c => ({ c, f: parseISO(c.from), t: c.to ? parseISO(c.to) : null }))
+    .filter(x => x.f !== null).sort((x, y) => x.f - y.f);
+  const NEG = -1e9, POS = 1e9, segs = [];
+  let cur = NEG;
+  list.forEach((x, i) => {
+    const next = list[i + 1] ? list[i + 1].f - 1 : POS;
+    if (next < x.f) return;                                   // два изменения с одной даты: действует последнее
+    let end = (x.t !== null && x.t >= x.f) ? Math.min(x.t, next) : next;
+    if (x.f > cur) segs.push(Object.assign({ a: cur, b: x.f - 1 }, base));
+    let seg;
+    if (x.c.kind === 'off') seg = { off: true, fl: base.fl, wk: 0, price: base.price };
+    else {
+      const days = String(x.c.days || '').trim();
+      const fl = days ? flagsOf(days) : base.fl;
+      const nd = fl.reduce((p, q) => p + q, 0);
+      const pw = safeNum(x.c.perWeek);
+      const price = safeNum(x.c.price);
+      seg = { off: false, fl, wk: pw !== null ? pw : (days ? nd : base.wk), price: price !== null ? price : base.price };
+    }
+    segs.push(Object.assign({ a: x.f, b: end }, seg));
+    cur = end + 1;
+  });
+  if (cur <= POS) segs.push(Object.assign({ a: cur, b: POS }, base));
+  return segs;
+}
+
+/** Занятия и сумма по прайсу (до скидки) за окно [ms, meEff] с учётом начала занятий и изменений. */
+function monthPlan(s, segs, ms, meEff) {
+  const st = parseISO(s.start);
+  if (st === null) return { lessons: 0, gross: 0 };
+  let lessons = 0, gross = 0;
+  segs.forEach(g => {
+    if (g.off) return;
+    const n = countLessons(g.fl, g.wk, Math.max(g.a, ms, st), Math.min(g.b, meEff));
+    lessons += n; gross += n * g.price;
+  });
+  return { lessons, gross };
+}
+
+function describeChange(c) {
+  const d = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '.' + m[2] + '.' + m[1] : '?'; };
+  let t = 'с ' + d(c.from) + (c.to ? ' по ' + d(c.to) : '') + ': ';
+  if (c.kind === 'off') return t + 'не ходит' + (c.note ? ' (' + c.note + ')' : '');
+  const parts = [];
+  if (String(c.days || '').trim()) parts.push(String(c.days).trim());
+  if (safeNum(c.perWeek) !== null) parts.push(safeNum(c.perWeek) + ' зан. в неделю');
+  if (safeNum(c.price) !== null) parts.push('цена ' + safeNum(c.price) + ' ₽');
+  return t + (parts.join(', ') || 'расписание без изменений') + (c.note ? ' (' + c.note + ')' : '');
+}
+
+function changeCheck(c) {
+  if (parseISO(c.from) === null) return 'Укажите дату «с»';
+  if (c.to && (parseISO(c.to) === null || parseISO(c.to) < parseISO(c.from))) return 'Дата «по» раньше даты «с»';
+  if (c.kind === 'off') return '';
+  const days = String(c.days || '').trim(), pw = safeNum(c.perWeek), pr = safeNum(c.price);
+  if (!days && pw === null && pr === null) return 'Укажите дни, число занятий в неделю или цену';
+  if (days) {
+    const nd = flagsOf(days).reduce((p, q) => p + q, 0);
+    if (nd === 0) return 'Не распознаны дни (пишите Пн, Вт, Ср, Чт, Пт, Сб, Вс)';
+    if (pw !== null && nd !== pw) return 'Дней ' + nd + ', а занятий в неделю ' + pw;
+  }
+  return '';
 }
 
 function isPaidRow(r) { return !!r.ok; }
@@ -112,14 +182,15 @@ function compute(students, payRows, repDay, toDate) {
       dpct = raw >= 1 ? raw : 0;
       promo = g.firstPromo + (g.listSum > 0 && g.discSum > 0 ? (raw >= 1 ? ' (-' + raw + '%)' : ' (-' + Math.round(g.discSum / g.pCnt) + ' ₽)') : '');
     }
-    const price = safeNum(s.price) || 0;
     const exp = new Array(NM).fill(0), planR = new Array(NM).fill(0);
+    const segs = buildSegments(s, fl);
     for (let m = 0; m < NM; m++) {
       if (!active) continue;
       const mo = MONTHS[m];
       const meEff = toDate ? Math.min(mo.me, repDay) : mo.me;
-      exp[m] = lessonsIn(s, fl, mo.ms, meEff);
-      planR[m] = Math.round(exp[m] * price * (1 - dpct / 100));
+      const mp = monthPlan(s, segs, mo.ms, meEff);
+      exp[m] = mp.lessons;
+      planR[m] = Math.round(mp.gross * (1 - dpct / 100));
     }
     // «водопад»: оплаченные занятия закрывают месяцы по порядку
     const cov = new Array(NM).fill(0), factR = new Array(NM).fill(0), owedR = new Array(NM).fill(0);
@@ -138,8 +209,8 @@ function compute(students, payRows, repDay, toDate) {
       if (m <= repIdx) { planSum += planR[m]; }
       factSum += factR[m];
     }
-    const repMonthFull = repIdx >= 0 && active ? lessonsIn(s, fl, MONTHS[repIdx].ms, MONTHS[repIdx].me) : 0;
-    const repMonthDone = repIdx >= 0 && active ? lessonsIn(s, fl, MONTHS[repIdx].ms, Math.min(MONTHS[repIdx].me, repDay)) : 0;
+    const repMonthFull = repIdx >= 0 && active ? monthPlan(s, segs, MONTHS[repIdx].ms, MONTHS[repIdx].me).lessons : 0;
+    const repMonthDone = repIdx >= 0 && active ? monthPlan(s, segs, MONTHS[repIdx].ms, Math.min(MONTHS[repIdx].me, repDay)).lessons : 0;
     return {
       s, active, exp, planR, cov, factR, owedR, planSum, paid: g.TP, paidLessons: g.TL, balance: g.TP - planSum,
       owedTotal: owedR.reduce((a, b) => a + b, 0), credit: g.TP - factSum, promo, dpct, repMonthFull, repMonthDone, check: scheduleCheck(s), nPay: g.n,
@@ -248,6 +319,13 @@ function sanitizeRow(r) {
   };
 }
 const STATUSES = ['Активен', 'Пауза', 'Завершил'];
+const iso10 = v => (/^\d{4}-\d{2}-\d{2}$/.test(str(v, 10)) ? str(v, 10) : '');
+function sanitizeChange(c, newId) {
+  if (!c || typeof c !== 'object') return null;
+  const from = iso10(c.from);                                  // пустая дата допустима: недозаполненное изменение не теряем, в расчёте оно игнорируется
+  const pw = safeNum(c.perWeek), pr = safeNum(c.price);
+  return { id: str(c.id, 40) || newId(), kind: c.kind === 'off' ? 'off' : 'sched', from, to: iso10(c.to), days: str(c.days, 200).trim(), perWeek: pw === null ? '' : pw, price: pr === null ? '' : pr, note: str(c.note, 200).trim() };
+}
 function sanitizeStudent(s, newId) {
   if (!s || typeof s !== 'object') return null;
   const name = str(s.name, 200).trim();
@@ -259,6 +337,7 @@ function sanitizeStudent(s, newId) {
     perWeek: wk === null ? '' : wk, price: pr === null ? 1300 : pr, status: STATUSES.includes(s.status) ? s.status : 'Активен',
     comment: str(s.comment, 500), email: str(s.email, 200), phone: str(s.phone, 60),
     tg: normNick(s.tg), tgName: str(s.tgName, 200).trim(),
+    changes: (Array.isArray(s.changes) ? s.changes : []).slice(0, 60).map(c => sanitizeChange(c, newId)).filter(Boolean),
   };
 }
 
@@ -345,6 +424,29 @@ function debtRows(M) {
   return { rows, skipped, total: rows.reduce((a, x) => a + x.sum, 0) };
 }
 
+/** Таблица «весь список учеников со всеми столбцами» + лист с изменениями расписания (для скачивания в Excel). */
+function rosterExport(M, payments) {
+  const dmy = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '.' + m[2] + '.' + m[1] : ''; };
+  const lastPay = new Map();
+  (payments || []).filter(r => r.ok).forEach(r => { const p = lastPay.get(r.n); if (!p || String(r.c) > String(p.c)) lastPay.set(r.n, r); });
+  const head = ['№', 'ФИО ученика', 'ФИО плательщика (если отличается)', 'Телефон', 'Email', 'Ник в Telegram', 'Имя для бота', 'Экзамен', 'Начало занятий',
+    'Дни и время занятий', 'Дни, в которые ходит ученик', 'Занятий в неделю', 'Обычно занятий в месяц', 'Цена занятия, ₽', 'Скидка (промокод)', 'Статус', 'Комментарий',
+    'Проверка расписания', 'Изменения в расписании', 'План с начала занятий, ₽', 'Оплачено, ₽', 'Баланс (оплачено − план), ₽', 'Нужно доплатить, ₽'];
+  const rows = M.rows.map((r, i) => {
+    const s = r.s, lp = lastPay.get(s.name) || {};
+    const wk = safeNum(s.perWeek);
+    return [i + 1, s.name, lp.pa || '', s.phone || lp.ph || '', s.email || lp.em || '', s.tg || '', s.tgName || '', s.exam || '', dmy(s.start),
+      s.days || '', s.actual || '', wk === null ? '' : wk, wk === null ? '' : wk * 4, safeNum(s.price) === null ? '' : safeNum(s.price), r.promo || '', s.status || 'Активен', s.comment || '',
+      r.check, (s.changes || []).map(describeChange).join('; '), r.planSum, r.paid, r.balance, r.owedTotal];
+  });
+  const chHead = ['ФИО ученика', 'Что меняется', 'С даты', 'По дату', 'Дни', 'Занятий в неделю', 'Цена занятия, ₽', 'Комментарий'];
+  const chRows = [];
+  M.rows.forEach(r => (r.s.changes || []).slice().sort((a, b) => String(a.from).localeCompare(String(b.from))).forEach(c => {
+    chRows.push([r.s.name, c.kind === 'off' ? 'Не ходит' : 'Новое расписание', dmy(c.from), dmy(c.to), c.days || '', safeNum(c.perWeek) === null ? '' : safeNum(c.perWeek), safeNum(c.price) === null ? '' : safeNum(c.price), c.note || '']);
+  }));
+  return { head, rows, chHead, chRows };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
+  module.exports = { buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
 }

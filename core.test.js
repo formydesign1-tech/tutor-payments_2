@@ -157,3 +157,82 @@ test('debtRows на реальных данных: сумма строк = «Н�
   assert.equal(D.total, M.kpi.owed);
   assert.ok(D.rows.every(r => r.sum > 0));
 });
+
+/* ---------- изменения в расписании ученика ---------- */
+const OCT = { ms: core.dayNum(2026, 9, 1), me: core.dayNum(2026, 10, 0) };
+const baseSt = (changes) => ({ id: 'a', name: 'А', start: '2026-09-01', days: 'Пн, Ср', actual: '', perWeek: 2, price: 1000, status: 'Активен', changes: changes || [] });
+const octPlan = st => { const segs = core.buildSegments(st, ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(d => (st.days.includes(d) ? 1 : 0))); return core.monthPlan(st, segs, OCT.ms, OCT.me); };
+
+test('без изменений октябрь: 4 понедельника + 4 среды', () => {
+  assert.deepEqual(octPlan(baseSt()), { lessons: 8, gross: 8000 });
+});
+
+test('с 15 октября ходит 1 раз в неделю (только среда)', () => {
+  const r = octPlan(baseSt([{ kind: 'sched', from: '2026-10-15', to: '', days: 'Ср', perWeek: 1, price: '' }]));
+  assert.equal(r.lessons, 6);                                   // до 14.10: Пн 5, 12, Ср 7, 14; после: Ср 21, 28
+  assert.equal(r.gross, 6000);
+});
+
+test('не ходит с даты по дату, потом возвращается к обычному расписанию', () => {
+  const r = octPlan(baseSt([{ kind: 'off', from: '2026-10-15', to: '2026-10-27' }]));
+  assert.equal(r.lessons, 5);                                   // 4 до перерыва + Ср 28.10
+});
+
+test('не ходит с даты без даты окончания: занятий больше нет', () => {
+  assert.equal(octPlan(baseSt([{ kind: 'off', from: '2026-10-15' }])).lessons, 4);
+});
+
+test('следующее изменение закрывает предыдущее', () => {
+  const r = octPlan(baseSt([{ kind: 'off', from: '2026-10-15' }, { kind: 'sched', from: '2026-10-22', days: 'Ср' }]));
+  assert.equal(r.lessons, 5);                                   // 4 + Ср 28.10
+});
+
+test('изменение цены с даты считается по новой цене', () => {
+  const r = octPlan(baseSt([{ kind: 'sched', from: '2026-10-15', price: 1500 }]));
+  assert.equal(r.lessons, 8);
+  assert.equal(r.gross, 4 * 1000 + 4 * 1500);                   // 4 занятия до 15.10 и 4 после
+});
+
+test('изменения до начала занятий и мусорные даты не ломают расчёт', () => {
+  assert.equal(octPlan(baseSt([{ kind: 'off', from: '' }, { kind: 'off', from: 'вчера' }])).lessons, 8);
+  assert.equal(octPlan(baseSt([{ kind: 'off', from: '2026-01-01', to: '2026-01-31' }])).lessons, 8);
+});
+
+test('compute учитывает изменения: план и долг за октябрь', () => {
+  const st = [baseSt([{ kind: 'off', from: '2026-10-15' }])];
+  const M = core.compute(st, [], core.dayNum(2026, 9, 31), false);
+  assert.equal(M.rows[0].exp[9], 4);
+  assert.equal(M.rows[0].planR[9], 4000);
+  assert.equal(M.rows[0].owedR[9], 4000);
+  assert.equal(core.compute([baseSt()], [], core.dayNum(2026, 9, 31), false).rows[0].exp[9], 8);
+});
+
+test('sanitizeStudent чистит изменения; describeChange и changeCheck', () => {
+  const s = core.sanitizeStudent({ name: 'А', changes: [{ kind: 'sched', from: '2026-10-15', days: 'Ср', perWeek: '1' }, { kind: 'off', from: '2026-11-01', to: '2026-11-10', note: 'болеет' }, null, 5] }, () => 'id1');
+  assert.equal(s.changes.length, 2);
+  assert.equal(s.changes[0].perWeek, 1);
+  assert.equal(s.changes[0].id, 'id1');
+  assert.equal(core.describeChange(s.changes[1]), 'с 01.11.2026 по 10.11.2026: не ходит (болеет)');
+  assert.equal(core.describeChange(s.changes[0]), 'с 15.10.2026: Ср, 1 зан. в неделю');
+  assert.equal(core.changeCheck(s.changes[0]), '');
+  assert.match(core.changeCheck({ kind: 'sched', from: '2026-10-15' }), /Укажите/);
+  assert.match(core.changeCheck({ kind: 'off', from: '2026-10-15', to: '2026-10-01' }), /раньше/);
+  assert.match(core.changeCheck({ kind: 'sched', from: '', days: 'Ср' }), /дату/);
+  assert.equal(core.sanitizeStudent({ name: 'Б' }, () => 'x').changes.length, 0);
+});
+
+test('rosterExport: все столбцы, плательщик из последнего платежа, лист изменений', () => {
+  const st = [Object.assign(baseSt([{ kind: 'off', from: '2026-10-15', note: 'отпуск' }]), { tg: 'abcde', tgName: 'Аня', phone: '+7 1', comment: 'к' })];
+  const pay = [{ id: '1', c: '2026-09-01 10:00:00', n: 'А', pa: 'Мама Ани', pr: 'Оплата уроков (Тип занятий: Абонемент 12 занятий , Месяц: Сентябрь 2026) - 1x12000 = 12000', am: 12000, pm: 12000, di: null, pc: '', ok: 1 }];
+  const M = core.compute(st, pay, core.dayNum(2026, 9, 31), false);
+  const X = core.rosterExport(M, pay);
+  const row = X.rows[0], col = n => row[X.head.indexOf(n)];
+  assert.equal(col('ФИО плательщика (если отличается)'), 'Мама Ани');
+  assert.equal(col('Ник в Telegram'), 'abcde');
+  assert.equal(col('Начало занятий'), '01.09.2026');
+  assert.equal(col('Обычно занятий в месяц'), 8);
+  assert.equal(col('Оплачено, ₽'), 12000);
+  assert.match(col('Изменения в расписании'), /не ходит \(отпуск\)/);
+  assert.ok(X.rows.every(r => r.length === X.head.length));
+  assert.deepEqual(X.chRows, [['А', 'Не ходит', '15.10.2026', '', '', '', '', 'отпуск']]);
+});

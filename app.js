@@ -8,7 +8,7 @@ const fmtDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); r
 const uid = () => 's' + Math.random().toString(36).slice(2, 8);
 
 const S = { students: [], payments: [], tab: 'summary', date: todayISO(), toDate: true, ready: false,
-            filter: 'all', q: '', pf: 'all', pq: '', sortK: 'owedTotal', sortDir: -1, showAllPays: false };
+            filter: 'all', q: '', pf: 'all', pq: '', sortK: 'owedTotal', sortDir: -1, showAllPays: false, openChg: new Set() };
 try { const m = localStorage.getItem('uo-mode'); if (m === '0') S.toDate = false; } catch (e) {}
 
 let rosterDirty = false, rosterTimer = null, saving = 0;
@@ -250,12 +250,47 @@ async function handleNickFile(file) {
   }
 }
 
+function chgRowHTML(c, si, ci) {
+  const f = (k, cls, ph, type) => '<input class="' + cls + '" data-cf="' + k + '" ' + (type ? 'type="' + type + '" ' : '') + 'value="' + esc(c[k]) + '" placeholder="' + ph + '" aria-label="' + ph + '">';
+  return '<div class="chg-row" data-si="' + si + '" data-ci="' + ci + '" data-kind="' + esc(c.kind) + '">' +
+    '<select data-cf="kind" aria-label="Что меняется"><option value="off"' + (c.kind === 'off' ? ' selected' : '') + '>Не ходит</option><option value="sched"' + (c.kind === 'sched' ? ' selected' : '') + '>Ходит по-другому</option></select>' +
+    '<label class="fld">с <input type="date" data-cf="from" value="' + esc(c.from) + '"></label>' +
+    '<label class="fld">по (необязательно) <input type="date" data-cf="to" value="' + esc(c.to) + '"></label>' +
+    '<span class="sched-only">' + f('days', 'w-act', 'Дни, напр. Ср') + f('perWeek', 'w-num', 'В неделю', 'number') + f('price', 'w-num', 'Цена, ₽', 'number') + '</span>' +
+    f('note', 'w-comm', 'Комментарий') +
+    '<button class="btn ghost small" data-delchg type="button">Убрать</button>' +
+    '<div class="chk" data-cchk>' + esc(changeCheck(c)) + '</div></div>';
+}
+function chgEditorHTML(s, i) {
+  const list = s.changes || [];
+  return '<tr class="chgrow" data-i="' + i + '"><td colspan="14"><div class="chg"><div class="note" style="margin:0 0 8px">Изменения в расписании «' + esc(s.name) + '». Расписание выше остаётся основным: до первого изменения и после периода с датой «по» ученик занимается по нему. ' +
+    '«Не ходит»: занятий в этот период нет и платить за них не нужно. «Ходит по-другому»: впишите новые дни (напр. «Ср»), число занятий в неделю подставится само; цену заполняйте, только если она меняется. Без даты «по» изменение действует, пока не начнётся следующее.</div>' +
+    list.map((c, ci) => chgRowHTML(c, i, ci)).join('') +
+    '<button class="btn small" data-addchg type="button">+ Добавить изменение</button></div></td></tr>';
+}
+
+function exportStudents() {
+  if (!window.XLSX) { setStatus('Не загрузилась библиотека для Excel. Обнови страницу.', true); return; }
+  const X = rosterExport(model(), S.payments);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([X.head].concat(X.rows));
+  ws['!cols'] = X.head.map((h, k) => ({ wch: Math.min(40, Math.max(10, h.length * 0.8, ...X.rows.map(r => String(r[k] === undefined ? '' : r[k]).length))) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Ученики');
+  if (X.chRows.length) {
+    const w2 = XLSX.utils.aoa_to_sheet([X.chHead].concat(X.chRows));
+    w2['!cols'] = X.chHead.map(h => ({ wch: Math.max(14, h.length) }));
+    XLSX.utils.book_append_sheet(wb, w2, 'Изменения расписания');
+  }
+  XLSX.writeFile(wb, 'Ученики_' + todayISO() + '.xlsx');
+  setStatus('Список скачан: учеников ' + X.rows.length);
+}
+
 /* ---------- Ученики (редактирование) ---------- */
 function renderStudents(view) {
   const M = model(); const byName = new Map(M.rows.map(r => [r.s.id, r]));
-  let h = '<section class="card"><div class="chart-head"><h2>Список учеников и расписание</h2><span><button class="btn ghost small" id="nickbtn" type="button">Загрузить ники из списка</button> <button class="btn small" id="addst" type="button">+ Добавить ученика</button></span></div>' +
+  let h = '<section class="card"><div class="chart-head"><h2>Список учеников и расписание</h2><span class="btns"><button class="btn ghost small" id="exportst" type="button">Скачать список (Excel)</button> <button class="btn ghost small" id="nickbtn" type="button">Загрузить ники из списка</button> <button class="btn small" id="addst" type="button">+ Добавить ученика</button></span></div>' +
     '<p class="note" style="margin:0 0 10px">Правки сохраняются сами. План платежей считается по дате начала, дням недели и числу занятий в неделю. Если ученик ходит не во все дни из расписания, впиши реальные дни в колонку «Дни, в которые ходит».</p><div class="scroll"><table id="rt"><thead><tr>' +
-    ['Ученик', 'Ник в Telegram', 'Имя для бота', 'Экзамен', 'Начало', 'Дни и время', 'Дни, в которые ходит', 'В неделю', 'Цена занятия, ₽', 'Статус', 'Скидка', 'Комментарий', 'Проверка расписания', ''].map((n, i) => '<th class="l">' + n + '</th>').join('') + '</tr></thead><tbody>';
+    ['Ученик', 'Ник в Telegram', 'Имя для бота', 'Экзамен', 'Начало', 'Дни и время', 'Дни, в которые ходит', 'В неделю', 'Цена занятия, ₽', 'Статус', 'Скидка', 'Комментарий', 'Проверка расписания', 'Изменения', ''].map((n, i) => '<th class="l">' + n + '</th>').join('') + '</tr></thead><tbody>';
   S.students.forEach((s, i) => {
     const r = byName.get(s.id);
     h += '<tr data-i="' + i + '"><td class="l"><input class="w-name" data-f="name" value="' + esc(s.name) + '" aria-label="Ученик"></td>' +
@@ -271,15 +306,26 @@ function renderStudents(view) {
       '<td class="l" style="color:var(--ink2)">' + esc(r ? r.promo : '') + '</td>' +
       '<td class="l"><input class="w-comm" data-f="comment" value="' + esc(s.comment) + '" aria-label="Комментарий"></td>' +
       '<td class="chk" data-chk>' + esc(scheduleCheck(s)) + '</td>' +
+      '<td class="l"><button class="btn ghost small" data-chg type="button" aria-expanded="' + S.openChg.has(s.id) + '">' + ((s.changes || []).length ? 'Изменения · ' + s.changes.length : 'Изменить') + '</button></td>' +
       '<td class="l"><button class="btn ghost small" data-del type="button" aria-label="Удалить ученика">Удалить</button></td></tr>';
+    if (S.openChg.has(s.id)) h += chgEditorHTML(s, i);
   });
   h += '</tbody></table></div></section>';
   view.innerHTML = h;
   $('nickbtn').onclick = () => $('nickfile').click();
-  $('addst').onclick = () => { S.students.push({ id: uid(), name: 'Новый ученик', exam: '', start: '', days: '', actual: '', perWeek: '', price: 1300, status: 'Активен', comment: '', tg: '', tgName: '' }); scheduleRoster(); renderStudents(view); const rows = view.querySelectorAll('#rt tbody tr'); const last = rows[rows.length - 1]; if (last) { const inp = last.querySelector('input'); inp.focus(); inp.select(); } };
+  $('exportst').onclick = exportStudents;
+  $('addst').onclick = () => { S.students.push({ id: uid(), name: 'Новый ученик', exam: '', start: '', days: '', actual: '', perWeek: '', price: 1300, status: 'Активен', comment: '', tg: '', tgName: '', changes: [] }); scheduleRoster(); renderStudents(view); const rows = view.querySelectorAll('#rt tbody tr'); const last = rows[rows.length - 1]; if (last) { const inp = last.querySelector('input'); inp.focus(); inp.select(); } };
   const tb = view.querySelector('#rt tbody');
   tb.addEventListener('change', e => {
-    const el = e.target, tr = el.closest('tr'); if (!tr || !el.dataset.f) return;
+    const el = e.target;
+    if (el.dataset.cf) {
+      const row = el.closest('[data-ci]'), st = S.students[+row.dataset.si], c = st && st.changes[+row.dataset.ci]; if (!c) return;
+      const k = el.dataset.cf; let v = el.value;
+      if (k === 'perWeek' || k === 'price') v = v === '' ? '' : Number(v);
+      c[k] = v; if (k === 'kind') row.dataset.kind = v;
+      row.querySelector('[data-cchk]').textContent = changeCheck(c); scheduleRoster(); return;
+    }
+    const tr = el.closest('tr'); if (!tr || !el.dataset.f) return;
     const s = S.students[+tr.dataset.i]; const f = el.dataset.f;
     let v = el.value;
     if (f === 'perWeek' || f === 'price') v = v === '' ? '' : Number(v);
@@ -288,6 +334,12 @@ function renderStudents(view) {
     s[f] = v; tr.querySelector('[data-chk]').textContent = scheduleCheck(s); scheduleRoster();
   });
   tb.addEventListener('click', e => {
+    const tg = e.target.closest('[data-chg]');
+    if (tg) { const st = S.students[+tg.closest('tr').dataset.i]; if (S.openChg.has(st.id)) S.openChg.delete(st.id); else S.openChg.add(st.id); renderStudents(view); return; }
+    const ad = e.target.closest('[data-addchg]');
+    if (ad) { const st = S.students[+ad.closest('tr').dataset.i]; st.changes = st.changes || []; st.changes.push({ id: uid(), kind: 'off', from: S.date || todayISO(), to: '', days: '', perWeek: '', price: '', note: '' }); scheduleRoster(); renderStudents(view); return; }
+    const dc = e.target.closest('[data-delchg]');
+    if (dc) { const row = dc.closest('[data-ci]'), st = S.students[+row.dataset.si]; st.changes.splice(+row.dataset.ci, 1); scheduleRoster(); renderStudents(view); return; }
     const b = e.target.closest('[data-del]'); if (!b) return;
     const tr = b.closest('tr'), i = +tr.dataset.i;
     if (b.dataset.sure) { S.students.splice(i, 1); scheduleRoster(); renderStudents(view); return; }
