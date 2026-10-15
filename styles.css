@@ -19,6 +19,7 @@
   --bad:#ff9a8f; --bad-bg:#3a1f1c; --good:#6fd36f; --good-bg:#16301a; --neutral-bg:#2a2e30; --warn-bg:#3a2f12; --warn:#f2c76a; color-scheme:dark}
 body{background:var(--bg);color:var(--ink);font:400 14px/1.5 var(--f-body);padding-inline:16px;padding-block:20px 48px}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 .wrap{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
 h1,h2{font-family:var(--f-head);margin:0;text-wrap:balance;letter-spacing:-.01em}
 h1{font-size:26px;line-height:1.15;font-weight:700}

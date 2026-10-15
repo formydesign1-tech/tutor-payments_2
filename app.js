@@ -122,6 +122,7 @@ function renderSummary(view) {
     ['Нужно доплатить', rub(K.owed), 'оплата вперёд ещё ' + rub(Math.max(0, K.prepaid)), 'var(--s-owed)'],
   ].map(([l, v, n, c], i) => '<div class="kpi' + (i === 3 ? ' owed' : '') + '"><div class="l">' + (c ? '<span class="sw" style="background:' + c + '"></span>' : '') + l + '</div><div class="v">' + v + '</div><div class="n">' + n + '</div></div>').join('') + '</section>';
 
+  h += debtCardHTML(M);
   const cm = monthsShown.filter(m => m <= ri).slice(-6);
   if (cm.length) {
     h += '<section class="card"><div class="chart-head"><h2>План, факт и доплата по месяцам, ₽</h2><div class="legend">' + SER.map(s => '<span><i style="background:' + s.c + '"></i>' + s.n + '</span>').join('') + '</div></div><div id="chart"></div>' +
@@ -145,6 +146,7 @@ function renderSummary(view) {
     '<input type="search" id="q" placeholder="Найти ученика" aria-label="Найти ученика" value="' + esc(S.q) + '"></div><div class="scroll" id="st"></div>' +
     '<p class="note" style="margin:10px 0 0">Баланс: оплачено минус план с начала занятий до месяца отчёта. Плюс значит оплата вперёд, минус значит долг. Колонки «Нужно доплатить» считаются по неоплаченным занятиям каждого месяца и могут не совпадать с балансом, если деньги внесены вперёд на другие месяцы.</p></section>';
   view.innerHTML = h;
+  bindDebtCard();
   if (cm.length) drawChart(cm, T);
   view.querySelectorAll('.chip').forEach(c => c.onclick = () => { S.filter = c.dataset.f; view.querySelectorAll('.chip').forEach(x => x.setAttribute('aria-pressed', x === c)); drawStudents(M, monthsShown.filter(m => m <= ri && T.planR[m] > 0).slice(-3)); });
   const q = $('q'); q.addEventListener('input', e => { S.q = e.target.value.trim().toLowerCase(); drawStudents(M, monthsShown.filter(m => m <= ri && T.planR[m] > 0).slice(-3)); });
@@ -203,15 +205,62 @@ function drawStudents(M, dm) {
   el.querySelectorAll('th button').forEach(b => b.onclick = () => { const k = b.dataset.k; if (S.sortK === k) S.sortDir *= -1; else { S.sortK = k; S.sortDir = (k === 'name' || k === 'start') ? 1 : -1; } drawStudents(M, dm); });
 }
 
+/* ---------- выгрузка должников для бота ---------- */
+function debtCardHTML(M) {
+  const D = debtRows(M), ri = M.repIdx;
+  const who = new Set(D.rows.map(r => r.nick)).size;
+  let h = '<section class="card" id="debtcard"><div class="chart-head"><h2>Выгрузка должников для бота</h2><button class="btn small" id="debtdl" type="button"' + (D.rows.length ? '' : ' disabled') + '>Скачать Excel</button></div>';
+  if (ri < 0) return h + '<p class="note" style="margin:0">Дата отчёта раньше начала учёта, долгов нет.</p></section>';
+  h += '<p class="note" style="margin:0 0 8px">Долги на ' + esc(fmtDate(S.date)) + ' (' + (S.toDate ? 'занятия до даты' : 'месяц целиком') + '). Одна строка = ник, имя, месяц и сумма недоплаты за этот месяц. Формат как в файле для бота: лист «Оплаты», колонки Ник, Имя, Месяц, Сумма.</p>';
+  if (D.rows.length) h += '<p style="margin:0 0 8px"><b>' + who + '</b> ' + (who === 1 ? 'получатель' : 'получателей') + ', строк в файле: <b>' + D.rows.length + '</b>, на сумму <b>' + rub(D.total) + '</b>.</p>';
+  else h += '<p style="margin:0 0 8px">Некому писать: в файл не попал ни один ученик с долгом.</p>';
+  if (D.skipped.length) h += '<div class="banner warn" style="margin:8px 0"><b>Не попадут в файл (' + D.skipped.length + '):</b>' + D.skipped.map(x => '<span>' + esc(x.name) + ' — долг ' + rub(x.total) + ', ' + esc(x.why) + '</span>').join('') + '<span>Исправь ник на вкладке «Ученики» и скачай файл снова.</span></div>';
+  if (D.rows.length) h += '<details><summary style="cursor:pointer">Что попадёт в файл</summary><div class="scroll"><table><thead><tr><th class="l">Ник</th><th class="l">Имя</th><th class="l">Месяц</th><th>Сумма</th></tr></thead><tbody>' +
+    D.rows.map(r => '<tr><td class="l">' + esc(r.nick) + '</td><td class="l">' + esc(r.name) + '</td><td class="l">' + esc(r.month) + '</td><td class="num">' + rub(r.sum) + '</td></tr>').join('') + '</tbody></table></div></details>';
+  return h + '</section>';
+}
+function bindDebtCard() {
+  const b = $('debtdl'); if (!b) return;
+  b.onclick = () => {
+    if (!window.XLSX) { setStatus('Не загрузилась библиотека для Excel. Обнови страницу.', true); return; }
+    const D = debtRows(model());
+    const aoa = [['Ник', 'Имя', 'Месяц', 'Сумма']].concat(D.rows.map(r => [r.nick, r.name, r.month, r.sum]));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 22 }, { wch: 28 }, { wch: 12 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Оплаты');
+    XLSX.writeFile(wb, 'Долги_' + S.date + '.xlsx');
+    setStatus('Файл скачан: строк ' + D.rows.length);
+  };
+}
+
+async function handleNickFile(file) {
+  if (!file) return;
+  $('notice').innerHTML = '';
+  try {
+    const res = matchRoster(S.students, await readFile(file));
+    if (res.error) throw new Error(res.error);
+    if (res.changed) { saving++; try { await api('PUT', '/api/students', { students: S.students }); setStatus('Сохранено'); } finally { saving--; } }
+    let html = '<div class="banner ' + (res.unmatched.length ? 'warn' : 'ok') + '"><b>Ники загружены</b><span>Найдено учеников: ' + res.matched + ', обновлено: ' + res.changed + ', без изменений: ' + res.same + '.</span>';
+    if (res.unmatched.length) html += '<span>Нет в базе (' + res.unmatched.length + '), пропущены: ' + res.unmatched.map(esc).join(', ') + '. Имя в списке должно совпадать с ФИО ученика на вкладке «Ученики».</span>';
+    if (res.noNick.length) html += '<span>Ника нет у (' + res.noNick.length + '): ' + res.noNick.map(esc).join(', ') + '. Им бот не напишет.</span>';
+    $('notice').innerHTML = html + '</div>';
+    render();
+  } catch (e) {
+    $('notice').innerHTML = '<div class="banner err"><b>Не получилось загрузить список</b><span>' + esc(e && e.message ? e.message : e) + '</span></div>';
+  }
+}
+
 /* ---------- Ученики (редактирование) ---------- */
 function renderStudents(view) {
   const M = model(); const byName = new Map(M.rows.map(r => [r.s.id, r]));
-  let h = '<section class="card"><div class="chart-head"><h2>Список учеников и расписание</h2><button class="btn small" id="addst" type="button">+ Добавить ученика</button></div>' +
+  let h = '<section class="card"><div class="chart-head"><h2>Список учеников и расписание</h2><span><button class="btn ghost small" id="nickbtn" type="button">Загрузить ники из списка</button> <button class="btn small" id="addst" type="button">+ Добавить ученика</button></span></div>' +
     '<p class="note" style="margin:0 0 10px">Правки сохраняются сами. План платежей считается по дате начала, дням недели и числу занятий в неделю. Если ученик ходит не во все дни из расписания, впиши реальные дни в колонку «Дни, в которые ходит».</p><div class="scroll"><table id="rt"><thead><tr>' +
-    ['Ученик', 'Экзамен', 'Начало', 'Дни и время', 'Дни, в которые ходит', 'В неделю', 'Цена занятия, ₽', 'Статус', 'Скидка', 'Комментарий', 'Проверка расписания', ''].map((n, i) => '<th class="l">' + n + '</th>').join('') + '</tr></thead><tbody>';
+    ['Ученик', 'Ник в Telegram', 'Имя для бота', 'Экзамен', 'Начало', 'Дни и время', 'Дни, в которые ходит', 'В неделю', 'Цена занятия, ₽', 'Статус', 'Скидка', 'Комментарий', 'Проверка расписания', ''].map((n, i) => '<th class="l">' + n + '</th>').join('') + '</tr></thead><tbody>';
   S.students.forEach((s, i) => {
     const r = byName.get(s.id);
     h += '<tr data-i="' + i + '"><td class="l"><input class="w-name" data-f="name" value="' + esc(s.name) + '" aria-label="Ученик"></td>' +
+      '<td class="l"><input class="w-act" data-f="tg" value="' + esc(s.tg) + '" placeholder="без @" aria-label="Ник в Telegram"></td>' +
+      '<td class="l"><input class="w-name" data-f="tgName" value="' + esc(s.tgName) + '" placeholder="как обращаться" aria-label="Имя для бота"></td>' +
       '<td class="l"><input class="w-act" data-f="exam" value="' + esc(s.exam) + '" aria-label="Экзамен"></td>' +
       '<td class="l"><input type="date" data-f="start" value="' + esc(s.start) + '" aria-label="Начало занятий"></td>' +
       '<td class="l"><input class="w-days" data-f="days" value="' + esc(s.days) + '" placeholder="Пн 17:00, Ср 17:00" aria-label="Дни и время"></td>' +
@@ -226,7 +275,8 @@ function renderStudents(view) {
   });
   h += '</tbody></table></div></section>';
   view.innerHTML = h;
-  $('addst').onclick = () => { S.students.push({ id: uid(), name: 'Новый ученик', exam: '', start: '', days: '', actual: '', perWeek: '', price: 1300, status: 'Активен', comment: '' }); scheduleRoster(); renderStudents(view); const rows = view.querySelectorAll('#rt tbody tr'); const last = rows[rows.length - 1]; if (last) { const inp = last.querySelector('input'); inp.focus(); inp.select(); } };
+  $('nickbtn').onclick = () => $('nickfile').click();
+  $('addst').onclick = () => { S.students.push({ id: uid(), name: 'Новый ученик', exam: '', start: '', days: '', actual: '', perWeek: '', price: 1300, status: 'Активен', comment: '', tg: '', tgName: '' }); scheduleRoster(); renderStudents(view); const rows = view.querySelectorAll('#rt tbody tr'); const last = rows[rows.length - 1]; if (last) { const inp = last.querySelector('input'); inp.focus(); inp.select(); } };
   const tb = view.querySelector('#rt tbody');
   tb.addEventListener('change', e => {
     const el = e.target, tr = el.closest('tr'); if (!tr || !el.dataset.f) return;
@@ -234,6 +284,7 @@ function renderStudents(view) {
     let v = el.value;
     if (f === 'perWeek' || f === 'price') v = v === '' ? '' : Number(v);
     if (f === 'name') { v = String(v).trim(); if (!v) { el.value = s.name; return; } }
+    if (f === 'tg') { v = normNick(v); el.value = v; }
     s[f] = v; tr.querySelector('[data-chk]').textContent = scheduleCheck(s); scheduleRoster();
   });
   tb.addEventListener('click', e => {
@@ -304,6 +355,7 @@ $('repdate').value = S.date;
 $('repdate').addEventListener('change', e => { S.date = e.target.value || todayISO(); if (!e.target.value) e.target.value = S.date; render(); });
 $('mode').value = S.toDate ? '1' : '0';
 $('mode').addEventListener('change', e => { S.toDate = e.target.value === '1'; try { localStorage.setItem('uo-mode', e.target.value); } catch (x) {} render(); });
+$('nickfile').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; await handleNickFile(f); });
 $('upbtn').onclick = () => $('file').click();
 $('file').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; await handleFile(f); });
 ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); document.body.classList.add('dragging'); } }));

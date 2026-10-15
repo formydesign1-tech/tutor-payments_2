@@ -94,3 +94,66 @@ test('оплата вперёд закрывает следующие месяц
   const nov = core.compute(s, pay, core.dayNum(2026, 10, 30), false);
   assert.equal(nov.kpi.owed, 1000);                                  // 13-е занятие не оплачено
 });
+
+/* ---------- ники и выгрузка должников для бота ---------- */
+test('normNick убирает @ и ссылку, isNick проверяет правила Telegram', () => {
+  assert.equal(core.normNick(' @tgg_111 '), 'tgg_111');
+  assert.equal(core.normNick('https://t.me/martyunina'), 'martyunina');
+  assert.equal(core.normNick(null), '');
+  assert.ok(core.isNick('tgg_111'));
+  assert.ok(!core.isNick('Наталья'));
+  assert.ok(!core.isNick('🎩'));
+  assert.ok(!core.isNick('abc'));
+});
+
+test('matchRoster переносит ники и имена из списка учеников по ФИО', () => {
+  const st = [
+    { id: '1', name: 'Татьяна Миронова' }, { id: '2', name: 'Исмаил' }, { id: '3', name: 'Без ника' }, { id: '4', name: 'Не в файле' },
+  ];
+  const m = [
+    ['Ученики'], [],
+    ['№', 'ФИО ученика', 'Телефон', 'Ник', 'Имя'],
+    [1, 'татьяна  миронова', '+7', '@exp_onyou', 'Татьяна Миронова'],
+    [2, 'Исмаил', '+7', 'isma16160', 'Исмаил Гасымов'],
+    [3, 'Без ника', '+7', '', ''],
+    [4, 'Лишний', '+7', 'extra_nick', 'Лишний'],
+  ];
+  const r = core.matchRoster(st, m);
+  assert.equal(r.matched, 3);
+  assert.equal(r.changed, 2);
+  assert.deepEqual(r.unmatched, ['Лишний']);
+  assert.deepEqual(r.noNick, ['Без ника']);
+  assert.deepEqual(r.notInFile, ['Не в файле']);
+  assert.equal(st[0].tg, 'exp_onyou');
+  assert.equal(st[1].tgName, 'Исмаил Гасымов');
+  assert.equal(core.matchRoster(st, m).changed, 0);                 // повторная загрузка ничего не меняет
+  assert.match(core.matchRoster(st, [['a', 'b']]).error, /ФИО ученика/);
+});
+
+test('sanitizeStudent сохраняет ник и имя для бота', () => {
+  const s = core.sanitizeStudent({ name: 'А', tg: '@nick_abc', tgName: ' Имя ' }, () => 'x');
+  assert.equal(s.tg, 'nick_abc');
+  assert.equal(s.tgName, 'Имя');
+  assert.equal(core.sanitizeStudent({ name: 'Б' }, () => 'y').tg, '');
+});
+
+test('debtRows: только активные должники, по строке на месяц, без ника — в пропущенных', () => {
+  const mk = (id, name, tg, status) => ({ id, name, start: '2026-09-01', days: 'Пн', actual: '', perWeek: 1, price: 1000, status: status || 'Активен', tg: tg || '', tgName: '' });
+  const st = [mk('a', 'Аня', 'anya_tg1'), mk('b', 'Боря', ''), mk('c', 'Вика', 'Вика'), mk('d', 'Глеб', 'gleb_tg1', 'Пауза'), mk('e', 'Дима', 'dima_tg1')];
+  st[0].tgName = 'Анна';
+  const pay = [{ id: '1', c: '2026-09-01 10:00:00', n: 'Дима', pr: 'Оплата уроков (Тип занятий: Абонемент 12 занятий , Месяц: Сентябрь 2026) - 1x12000 = 12000', am: 12000, pm: 12000, di: null, pc: '', ok: 1 }];
+  const M = core.compute(st, pay, core.dayNum(2026, 9, 31), false);   // конец октября: сентябрь 4 + октябрь 4 урока
+  const D = core.debtRows(M);
+  assert.deepEqual(D.rows.map(r => [r.nick, r.name, r.month, r.sum]), [['anya_tg1', 'Анна', 'сентябрь', 4000], ['anya_tg1', 'Анна', 'октябрь', 4000]]);
+  assert.equal(D.total, 8000);
+  assert.deepEqual(D.skipped.map(x => x.name), ['Боря', 'Вика']);    // без ника и «не-ник»; Глеб на паузе, Дима оплатил
+});
+
+test('debtRows на реальных данных: сумма строк = «Нужно доплатить» активных учеников с ником', () => {
+  const st = sample.students.map((s, i) => Object.assign({}, s, { tg: 'student_' + String(i).padStart(3, '0') }));
+  const M = core.compute(st, sample.payments, REPORT_DAY, true);
+  const D = core.debtRows(M);
+  assert.equal(D.skipped.length, 0);
+  assert.equal(D.total, M.kpi.owed);
+  assert.ok(D.rows.every(r => r.sum > 0));
+});

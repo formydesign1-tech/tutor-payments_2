@@ -258,6 +258,7 @@ function sanitizeStudent(s, newId) {
     id: str(s.id, 40) || newId(), name, exam: str(s.exam, 60), start, days: str(s.days, 200), actual: str(s.actual, 200),
     perWeek: wk === null ? '' : wk, price: pr === null ? 1300 : pr, status: STATUSES.includes(s.status) ? s.status : 'Активен',
     comment: str(s.comment, 500), email: str(s.email, 200), phone: str(s.phone, 60),
+    tg: normNick(s.tg), tgName: str(s.tgName, 200).trim(),
   };
 }
 
@@ -283,6 +284,67 @@ function applyImport(db, rows, newId) {
   return { added, updated, same, fresh, notPaid: rows.filter(r => r && !r.ok).length };
 }
 
+/* ---------- Telegram-ники и выгрузка должников для бота ---------- */
+const normName = v => String(v === null || v === undefined ? '' : v).toLowerCase().replace(/ё/g, 'е').replace(/[\s ]+/g, ' ').trim();
+function normNick(v) {                       // убираем @, ссылку t.me/, пробелы по краям
+  let n = String(v === null || v === undefined ? '' : v).trim();
+  n = n.replace(/^https?:\/\/(www\.)?(t\.me|telegram\.me)\//i, '').replace(/^(t\.me|telegram\.me)\//i, '').replace(/^@+/, '').replace(/\/+$/, '');
+  return n.slice(0, 64);
+}
+const isNick = n => /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(n);   // правила Telegram: латиница, цифры, _; 5–32 символа
+
+/** Список учеников (xlsx/csv с колонками «ФИО ученика», «Ник», «Имя») → ники и имена в карточки учеников. */
+function matchRoster(students, matrix) {
+  const hd = c => String(c === null || c === undefined ? '' : c).toLowerCase().replace(/[\s ]+/g, ' ').trim();
+  let hi = -1, iN = -1, iNick = -1, iName = -1;
+  for (let i = 0; i < Math.min(matrix.length, 20); i++) {
+    const low = matrix[i].map(hd);
+    const a = low.findIndex(x => x.startsWith('фио ученика') || x === 'ученик' || x === 'фио');
+    const b = low.indexOf('ник');
+    if (a >= 0 && b >= 0) { hi = i; iN = a; iNick = b; iName = low.indexOf('имя'); break; }
+  }
+  if (hi < 0) return { error: 'Не нашла колонки «ФИО ученика» и «Ник». Загрузи список учеников с такими заголовками.' };
+  const byName = new Map();
+  students.forEach(s => { const k = normName(s.name); if (!byName.has(k)) byName.set(k, []); byName.get(k).push(s); });
+  const out = { changed: 0, same: 0, matched: 0, unmatched: [], noNick: [] };
+  const seen = new Set();
+  matrix.slice(hi + 1).forEach(r => {
+    const full = String(r[iN] === undefined || r[iN] === null ? '' : r[iN]).trim();
+    if (!full) return;
+    const list = byName.get(normName(full));
+    if (!list) { out.unmatched.push(full); return; }
+    const nick = normNick(r[iNick]);
+    const nm = iName >= 0 ? String(r[iName] === undefined || r[iName] === null ? '' : r[iName]).trim().slice(0, 200) : '';
+    list.forEach(s => {
+      seen.add(s.id); out.matched++;
+      let ch = false;
+      if (nick && s.tg !== nick) { s.tg = nick; ch = true; }
+      if (nm && s.tgName !== nm) { s.tgName = nm; ch = true; }
+      if (ch) out.changed++; else out.same++;
+      if (!nick && !s.tg) out.noNick.push(s.name);
+    });
+  });
+  out.notInFile = students.filter(s => !seen.has(s.id)).map(s => s.name);
+  return out;
+}
+
+/** Таблица для бота: строка = ник + имя + месяц + сумма недоплаты. Только активные ученики с долгом. */
+function debtRows(M) {
+  const rows = [], skipped = [];
+  M.rows.forEach(r => {
+    if (!r.active) return;
+    const items = [];
+    for (let m = 0; m <= M.repIdx && m < NM; m++) if (r.owedR[m] > 0) items.push({ m, sum: r.owedR[m] });
+    if (!items.length) return;
+    const nick = normNick(r.s.tg);
+    const total = items.reduce((a, x) => a + x.sum, 0);
+    if (!nick) { skipped.push({ name: r.s.name, total, why: 'нет ника' }); return; }
+    if (!isNick(nick)) { skipped.push({ name: r.s.name, total, why: 'ник «' + nick + '» не похож на Telegram-ник (нужна латиница, цифры и _, от 5 символов)' }); return; }
+    items.forEach(x => rows.push({ nick, name: (r.s.tgName || r.s.name).trim(), month: MONTHS[x.m].name.toLowerCase(), sum: x.sum, student: r.s.name }));
+  });
+  return { rows, skipped, total: rows.reduce((a, x) => a + x.sum, 0) };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
+  module.exports = { matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
 }
