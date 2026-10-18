@@ -209,28 +209,31 @@ function drawStudents(M, dm) {
 function debtCardHTML(M) {
   const D = debtRows(M), ri = M.repIdx;
   const who = new Set(D.rows.map(r => r.nick)).size;
-  let h = '<section class="card" id="debtcard"><div class="chart-head"><h2>Выгрузка должников для бота</h2><button class="btn small" id="debtdl" type="button"' + (D.rows.length ? '' : ' disabled') + '>Скачать Excel</button></div>';
+  let h = '<section class="card" id="debtcard"><div class="chart-head"><h2>Выгрузка должников для бота</h2><span class="btns"><button class="btn ghost small" id="debtdl2" type="button"' + (D.rows.length ? '' : ' disabled') + '>Скачать с датами занятий</button> <button class="btn small" id="debtdl" type="button"' + (D.rows.length ? '' : ' disabled') + '>Скачать Excel</button></span></div>';
   if (ri < 0) return h + '<p class="note" style="margin:0">Дата отчёта раньше начала учёта, долгов нет.</p></section>';
-  h += '<p class="note" style="margin:0 0 8px">Долги на ' + esc(fmtDate(S.date)) + ' (' + (S.toDate ? 'занятия до даты' : 'месяц целиком') + '). Одна строка = ник, имя, месяц и сумма недоплаты за этот месяц. Формат как в файле для бота: лист «Оплаты», колонки Ник, Имя, Месяц, Сумма.</p>';
+  h += '<p class="note" style="margin:0 0 8px">Долги на ' + esc(fmtDate(S.date)) + ' (' + (S.toDate ? 'занятия до даты' : 'месяц целиком') + '). Одна строка = ник, имя, месяц и сумма недоплаты за этот месяц. «Скачать Excel»: формат как в файле для бота (лист «Оплаты», колонки Ник, Имя, Месяц, Сумма). «С датами занятий» добавляет колонки «Занятий» и «Даты занятий»: это неоплаченные занятия месяца (оплата закрывает занятия по порядку, поэтому долг приходится на последние даты).</p>';
   if (D.rows.length) h += '<p style="margin:0 0 8px"><b>' + who + '</b> ' + (who === 1 ? 'получатель' : 'получателей') + ', строк в файле: <b>' + D.rows.length + '</b>, на сумму <b>' + rub(D.total) + '</b>.</p>';
   else h += '<p style="margin:0 0 8px">Некому писать: в файл не попал ни один ученик с долгом.</p>';
   if (D.skipped.length) h += '<div class="banner warn" style="margin:8px 0"><b>Не попадут в файл (' + D.skipped.length + '):</b>' + D.skipped.map(x => '<span>' + esc(x.name) + ' — долг ' + rub(x.total) + ', ' + esc(x.why) + '</span>').join('') + '<span>Исправь ник на вкладке «Ученики» и скачай файл снова.</span></div>';
-  if (D.rows.length) h += '<details><summary style="cursor:pointer">Что попадёт в файл</summary><div class="scroll"><table><thead><tr><th class="l">Ник</th><th class="l">Имя</th><th class="l">Месяц</th><th>Сумма</th></tr></thead><tbody>' +
-    D.rows.map(r => '<tr><td class="l">' + esc(r.nick) + '</td><td class="l">' + esc(r.name) + '</td><td class="l">' + esc(r.month) + '</td><td class="num">' + rub(r.sum) + '</td></tr>').join('') + '</tbody></table></div></details>';
+  if (D.rows.length) h += '<details><summary style="cursor:pointer">Что попадёт в файл</summary><div class="scroll"><table><thead><tr><th class="l">Ник</th><th class="l">Имя</th><th class="l">Месяц</th><th>Сумма</th><th>Занятий</th><th class="l">Даты занятий</th></tr></thead><tbody>' +
+    D.rows.map(r => '<tr><td class="l">' + esc(r.nick) + '</td><td class="l">' + esc(r.name) + '</td><td class="l">' + esc(r.month) + '</td><td class="num">' + rub(r.sum) + '</td><td class="num">' + r.lessons + '</td><td class="l">' + esc(r.dates) + '</td></tr>').join('') + '</tbody></table></div></details>';
   return h + '</section>';
 }
 function bindDebtCard() {
-  const b = $('debtdl'); if (!b) return;
-  b.onclick = () => {
+  const dl = (withDates) => () => {
     if (!window.XLSX) { setStatus('Не загрузилась библиотека для Excel. Обнови страницу.', true); return; }
     const D = debtRows(model());
-    const aoa = [['Ник', 'Имя', 'Месяц', 'Сумма']].concat(D.rows.map(r => [r.nick, r.name, r.month, r.sum]));
+    const head = withDates ? ['Ник', 'Имя', 'Месяц', 'Сумма', 'Занятий', 'Даты занятий'] : ['Ник', 'Имя', 'Месяц', 'Сумма'];
+    const aoa = [head].concat(D.rows.map(r => withDates ? [r.nick, r.name, r.month, r.sum, r.lessons, r.dates] : [r.nick, r.name, r.month, r.sum]));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 22 }, { wch: 28 }, { wch: 12 }, { wch: 10 }];
+    ws['!cols'] = [{ wch: 22 }, { wch: 28 }, { wch: 12 }, { wch: 10 }].concat(withDates ? [{ wch: 9 }, { wch: 44 }] : []);
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Оплаты');
-    XLSX.writeFile(wb, 'Долги_' + S.date + '.xlsx');
+    XLSX.writeFile(wb, 'Долги' + (withDates ? '_с_датами_' : '_') + S.date + '.xlsx');
     setStatus('Файл скачан: строк ' + D.rows.length);
   };
+  const a = $('debtdl'), b = $('debtdl2');
+  if (a) a.onclick = dl(false);
+  if (b) b.onclick = dl(true);
 }
 
 async function handleNickFile(file) {

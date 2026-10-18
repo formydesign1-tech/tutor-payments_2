@@ -236,3 +236,27 @@ test('rosterExport: все столбцы, плательщик из после�
   assert.ok(X.rows.every(r => r.length === X.head.length));
   assert.deepEqual(X.chRows, [['А', 'Не ходит', '15.10.2026', '', '', '', '', 'отпуск']]);
 });
+
+/* ---------- долги с количеством и датами занятий ---------- */
+test('lessonDays: даты занятий совпадают с количеством и учитывают изменения', () => {
+  const st = baseSt([{ kind: 'off', from: '2026-10-15', to: '2026-10-27' }]);
+  const fl = [1, 0, 1, 0, 0, 0, 0];
+  const segs = core.buildSegments(st, fl);
+  const days = core.lessonDays(st, segs, OCT.ms, OCT.me);
+  assert.deepEqual(days.map(core.dayDM), ['05.10', '07.10', '12.10', '14.10', '28.10']);
+  assert.equal(days.length, core.monthPlan(st, segs, OCT.ms, OCT.me).lessons);
+});
+
+test('debtRows: количество и даты неоплаченных занятий — последние занятия месяца', () => {
+  // Пн и Ср, 1000 ₽; оплачено 14 занятий: сентябрь (9) и 5 занятий октября; октябрь по 31.10 = 8 занятий, не оплачены 3 последних
+  const st = [Object.assign(baseSt(), { tg: 'anya_tg1' })];
+  const pay = [{ id: '1', c: '2026-09-01 10:00:00', n: 'А', pr: 'Оплата уроков (Тип занятий: Абонемент 14 занятий , Месяц: Сентябрь 2026) - 1x14000 = 14000', am: 14000, pm: 14000, di: null, pc: '', ok: 1 }];
+  const M = core.compute(st, pay, core.dayNum(2026, 9, 31), false);
+  const D = core.debtRows(M);
+  assert.equal(M.rows[0].exp[8], 9);                              // сентябрь: Пн 7, 14, 21, 28 и Ср 2, 9, 16, 23, 30
+  assert.equal(D.rows.length, 1);
+  assert.equal(D.rows[0].month, 'октябрь');
+  assert.equal(D.rows[0].lessons, 3);
+  assert.equal(D.rows[0].sum, 3000);
+  assert.equal(D.rows[0].dates, '21.10, 26.10, 28.10');
+});

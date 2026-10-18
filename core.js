@@ -118,6 +118,25 @@ function monthPlan(s, segs, ms, meEff) {
   return { lessons, gross };
 }
 
+/** Даты занятий в окне [ms, meEff] (числа дней) по тому же расписанию, что и monthPlan. */
+function lessonDays(s, segs, ms, meEff) {
+  const st = parseISO(s.start);
+  if (st === null) return [];
+  const out = [];
+  segs.forEach(g => {
+    if (g.off) return;
+    const S = Math.max(g.a, ms, st), E = Math.min(g.b, meEff);
+    if (E < S || !g.fl.some(Boolean)) return;
+    const ds = [];
+    g.fl.forEach((on, i) => { if (!on) return; for (let d = S + ((((i + 1) - wd(S)) % 7) + 7) % 7; d <= E; d += 7) ds.push(d); });
+    ds.sort((a, b) => a - b);
+    const n = countLessons(g.fl, g.wk, S, E);                 // если дней в расписании больше, чем занятий в неделю, лишние даты отбрасываем
+    out.push(...(ds.length > n ? ds.slice(0, n) : ds));
+  });
+  return out.sort((a, b) => a - b);
+}
+const dayDM = d => { const t = new Date(d * 864e5); return String(t.getUTCDate()).padStart(2, '0') + '.' + String(t.getUTCMonth() + 1).padStart(2, '0'); };
+
 function describeChange(c) {
   const d = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '.' + m[2] + '.' + m[1] : '?'; };
   let t = 'с ' + d(c.from) + (c.to ? ' по ' + d(c.to) : '') + ': ';
@@ -193,13 +212,18 @@ function compute(students, payRows, repDay, toDate) {
       planR[m] = Math.round(mp.gross * (1 - dpct / 100));
     }
     // «водопад»: оплаченные занятия закрывают месяцы по порядку
-    const cov = new Array(NM).fill(0), factR = new Array(NM).fill(0), owedR = new Array(NM).fill(0);
+    const cov = new Array(NM).fill(0), factR = new Array(NM).fill(0), owedR = new Array(NM).fill(0), owedLes = new Array(NM).fill(0), owedDates = new Array(NM).fill(null);
     let prior = 0, planSum = 0, factSum = 0;
     for (let m = 0; m < NM; m++) {
       cov[m] = Math.min(exp[m], Math.max(0, g.TL - prior));
       prior += exp[m];
       factR[m] = g.TL === 0 ? 0 : cov[m] / g.TL * g.TP;
       if (m <= repIdx && active && exp[m] > 0) owedR[m] = Math.round(planR[m] * Math.max(0, exp[m] - cov[m]) / exp[m]);
+      if (owedR[m] > 0) {                                        // неоплаченные занятия — последние в месяце (оплата закрывает занятия по порядку)
+        owedLes[m] = Math.max(0, exp[m] - cov[m]);
+        const mo = MONTHS[m], all = lessonDays(s, segs, mo.ms, toDate ? Math.min(mo.me, repDay) : mo.me);
+        owedDates[m] = owedLes[m] >= all.length ? all : all.slice(all.length - owedLes[m]);
+      }
       totals.planL[m] += (m <= repIdx ? exp[m] : 0);
       totals.planR[m] += (m <= repIdx ? planR[m] : 0);
       totals.factL[m] += cov[m];
@@ -212,7 +236,7 @@ function compute(students, payRows, repDay, toDate) {
     const repMonthFull = repIdx >= 0 && active ? monthPlan(s, segs, MONTHS[repIdx].ms, MONTHS[repIdx].me).lessons : 0;
     const repMonthDone = repIdx >= 0 && active ? monthPlan(s, segs, MONTHS[repIdx].ms, Math.min(MONTHS[repIdx].me, repDay)).lessons : 0;
     return {
-      s, active, exp, planR, cov, factR, owedR, planSum, paid: g.TP, paidLessons: g.TL, balance: g.TP - planSum,
+      s, active, exp, planR, cov, factR, owedR, owedLes, owedDates, planSum, paid: g.TP, paidLessons: g.TL, balance: g.TP - planSum,
       owedTotal: owedR.reduce((a, b) => a + b, 0), credit: g.TP - factSum, promo, dpct, repMonthFull, repMonthDone, check: scheduleCheck(s), nPay: g.n,
     };
   });
@@ -419,7 +443,7 @@ function debtRows(M) {
     const total = items.reduce((a, x) => a + x.sum, 0);
     if (!nick) { skipped.push({ name: r.s.name, total, why: 'нет ника' }); return; }
     if (!isNick(nick)) { skipped.push({ name: r.s.name, total, why: 'ник «' + nick + '» не похож на Telegram-ник (нужна латиница, цифры и _, от 5 символов)' }); return; }
-    items.forEach(x => rows.push({ nick, name: (r.s.tgName || r.s.name).trim(), month: MONTHS[x.m].name.toLowerCase(), sum: x.sum, student: r.s.name }));
+    items.forEach(x => rows.push({ nick, name: (r.s.tgName || r.s.name).trim(), month: MONTHS[x.m].name.toLowerCase(), sum: x.sum, student: r.s.name, lessons: r.owedLes[x.m], dates: (r.owedDates[x.m] || []).map(dayDM).join(', ') }));
   });
   return { rows, skipped, total: rows.reduce((a, x) => a + x.sum, 0) };
 }
@@ -448,5 +472,5 @@ function rosterExport(M, payments) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
+  module.exports = { lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
 }
