@@ -249,7 +249,7 @@ function compute(students, payRows, repDay, toDate) {
   const known = new Set(students.map(s => s.name));
   const unknownPay = [...byName.keys()].filter(n => !known.has(n));
   return {
-    repIdx, rows, totals,
+    repIdx, repDay, rows, totals,
     kpi: {
       received: recvAll, plan: upto(totals.planR), fact: factUpTo, owed: upto(totals.owedR),
       prepaid: recvAll - factUpTo, payments: sum(payCnt), unknownPay,
@@ -431,21 +431,52 @@ function matchRoster(students, matrix) {
   return out;
 }
 
-/** Таблица для бота: строка = ник + имя + месяц + сумма недоплаты. Только активные ученики с долгом. */
-function debtRows(M) {
-  const rows = [], skipped = [];
+/** Сколько занятий по расписанию было после дня afterDay (не включая) и до дня uptoDay (включая). */
+function lessonsAfter(s, afterDay, uptoDay) {
+  if (uptoDay <= afterDay) return 0;
+  return lessonDays(s, buildSegments(s, scheduleFlags(s)), afterDay + 1, uptoDay).length;
+}
+
+/** Журнал напоминаний: { [id ученика]: { date: 'YYYY-MM-DD' (занятия по эту дату включительно закрыты напоминанием), sum, at } } */
+function sanitizeReminders(obj) {
+  const out = {};
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out;
+  Object.keys(obj).slice(0, 2000).forEach(k => {
+    const v = obj[k], date = v && iso10(v.date);
+    if (!date) return;
+    const sum = safeNum(v.sum);
+    out[str(k, 40)] = { date, sum: sum === null ? 0 : sum, at: str(v.at, 40) };
+  });
+  return out;
+}
+
+/**
+ * Таблица для бота: строка = ник + имя + месяц + сумма недоплаты (+ сколько занятий и какие даты).
+ * Только активные ученики с долгом. С opts.onlyActual и журналом напоминаний остаются те, у кого после
+ * последнего напоминания было хотя бы одно занятие; кому ещё не писали, тот подходит сразу.
+ */
+function debtRows(M, opts) {
+  opts = opts || {};
+  const rem = opts.reminders || {};
+  const rows = [], skipped = [], students = [], quiet = [];
   M.rows.forEach(r => {
     if (!r.active) return;
     const items = [];
     for (let m = 0; m <= M.repIdx && m < NM; m++) if (r.owedR[m] > 0) items.push({ m, sum: r.owedR[m] });
     if (!items.length) return;
-    const nick = normNick(r.s.tg);
     const total = items.reduce((a, x) => a + x.sum, 0);
+    const last = rem[r.s.id] ? rem[r.s.id].date : '';
+    if (opts.onlyActual && last) {
+      const ld = parseISO(last);
+      if (ld !== null && lessonsAfter(r.s, ld, M.repDay) === 0) { quiet.push({ name: r.s.name, total, last }); return; }
+    }
+    const nick = normNick(r.s.tg);
     if (!nick) { skipped.push({ name: r.s.name, total, why: 'нет ника' }); return; }
     if (!isNick(nick)) { skipped.push({ name: r.s.name, total, why: 'ник «' + nick + '» не похож на Telegram-ник (нужна латиница, цифры и _, от 5 символов)' }); return; }
-    items.forEach(x => rows.push({ nick, name: (r.s.tgName || r.s.name).trim(), month: MONTHS[x.m].name.toLowerCase(), sum: x.sum, student: r.s.name, lessons: r.owedLes[x.m], dates: (r.owedDates[x.m] || []).map(dayDM).join(', ') }));
+    students.push({ id: r.s.id, name: r.s.name, total });
+    items.forEach(x => rows.push({ nick, name: (r.s.tgName || r.s.name).trim(), month: MONTHS[x.m].name.toLowerCase(), sum: x.sum, student: r.s.name, id: r.s.id, last, lessons: r.owedLes[x.m], dates: (r.owedDates[x.m] || []).map(dayDM).join(', ') }));
   });
-  return { rows, skipped, total: rows.reduce((a, x) => a + x.sum, 0) };
+  return { rows, skipped, students, quiet, total: rows.reduce((a, x) => a + x.sum, 0) };
 }
 
 /** Таблица «весь список учеников со всеми столбцами» + лист с изменениями расписания (для скачивания в Excel). */
@@ -472,5 +503,5 @@ function rosterExport(M, payments) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
+  module.exports = { lessonsAfter, sanitizeReminders, lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
 }

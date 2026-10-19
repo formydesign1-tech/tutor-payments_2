@@ -7,7 +7,7 @@ const todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + pa
 const fmtDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '.' + m[2] + '.' + m[1] : (iso || ''); };
 const uid = () => 's' + Math.random().toString(36).slice(2, 8);
 
-const S = { students: [], payments: [], tab: 'summary', date: todayISO(), toDate: true, ready: false,
+const S = { students: [], payments: [], reminders: {}, debtAll: false, tab: 'summary', date: todayISO(), toDate: true, ready: false,
             filter: 'all', q: '', pf: 'all', pq: '', sortK: 'owedTotal', sortDir: -1, showAllPays: false, openChg: new Set() };
 try { const m = localStorage.getItem('uo-mode'); if (m === '0') S.toDate = false; } catch (e) {}
 
@@ -27,7 +27,7 @@ async function api(method, url, body) {
 
 async function loadState() {
   const d = await api('GET', '/api/state');
-  S.students = d.students || []; S.payments = d.payments || []; S.ready = true;
+  S.students = d.students || []; S.payments = d.payments || []; S.reminders = d.reminders || {}; S.ready = true;
 }
 
 async function saveRoster() {
@@ -84,6 +84,7 @@ function syncTabs() { document.querySelectorAll('[role=tab]').forEach(t => t.set
 
 function render() {
   const view = $('view');
+  renderRemind();
   const n = S.students.length, p = allPays().length;
   $('asof').textContent = n || p ? ('Учеников: ' + n + ' · платежей: ' + p) : '';
   if (!S.ready) { view.innerHTML = '<div class="card"><span class="status">Загружаю данные…</span></div>'; return; }
@@ -206,23 +207,45 @@ function drawStudents(M, dm) {
 }
 
 /* ---------- выгрузка должников для бота ---------- */
+const debtOpts = () => ({ reminders: S.reminders, onlyActual: !S.debtAll });
+const sentDate = () => { const t = todayISO(); return S.date > t ? t : S.date; };    // напоминание не может быть «из будущего»
+
+function renderRemind() {
+  const el = $('remind'); if (!el) return;
+  if (!S.ready || !S.students.length) { el.innerHTML = ''; return; }
+  const D = debtRows(model(), { reminders: S.reminders, onlyActual: true });
+  const n = D.students.length + D.skipped.length;
+  if (!n) { el.innerHTML = ''; return; }
+  const names = D.students.map(x => x.name).concat(D.skipped.map(x => x.name));
+  const sum = D.students.reduce((a, x) => a + x.total, 0) + D.skipped.reduce((a, x) => a + x.total, 0);
+  el.innerHTML = '<div class="banner warn"><b>Пора напомнить о долге: ' + n + ' ' + (n === 1 ? 'ученику' : 'ученикам') + ', на сумму ' + rub(sum) + '</b><span>' + names.slice(0, 8).map(esc).join(', ') + (names.length > 8 ? ' и ещё ' + (names.length - 8) : '') + '. После последнего напоминания у них было занятие.</span><span><button class="btn small" id="remgo" type="button">Открыть выгрузку</button></span></div>';
+  $('remgo').onclick = () => { S.tab = 'summary'; syncTabs(); render(); const c = $('debtcard'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+}
+
 function debtCardHTML(M) {
-  const D = debtRows(M), ri = M.repIdx;
+  const D = debtRows(M, debtOpts()), ri = M.repIdx;
   const who = new Set(D.rows.map(r => r.nick)).size;
-  let h = '<section class="card" id="debtcard"><div class="chart-head"><h2>Выгрузка должников для бота</h2><span class="btns"><button class="btn ghost small" id="debtdl2" type="button"' + (D.rows.length ? '' : ' disabled') + '>Скачать с датами занятий</button> <button class="btn small" id="debtdl" type="button"' + (D.rows.length ? '' : ' disabled') + '>Скачать Excel</button></span></div>';
+  const dis = D.rows.length ? '' : ' disabled';
+  let h = '<section class="card" id="debtcard"><div class="chart-head"><h2>Выгрузка должников для бота</h2><span class="btns"><button class="btn ghost small" id="debtdl2" type="button"' + dis + '>Скачать с датами занятий</button> <button class="btn small" id="debtdl" type="button"' + dis + '>Скачать Excel</button></span></div>';
   if (ri < 0) return h + '<p class="note" style="margin:0">Дата отчёта раньше начала учёта, долгов нет.</p></section>';
-  h += '<p class="note" style="margin:0 0 8px">Долги на ' + esc(fmtDate(S.date)) + ' (' + (S.toDate ? 'занятия до даты' : 'месяц целиком') + '). Одна строка = ник, имя, месяц и сумма недоплаты за этот месяц. «Скачать Excel»: формат как в файле для бота (лист «Оплаты», колонки Ник, Имя, Месяц, Сумма). «С датами занятий» добавляет колонки «Занятий» и «Даты занятий»: это неоплаченные занятия месяца (оплата закрывает занятия по порядку, поэтому долг приходится на последние даты).</p>';
+  h += '<p class="note" style="margin:0 0 8px">Долги на ' + esc(fmtDate(S.date)) + ' (' + (S.toDate ? 'занятия до даты' : 'месяц целиком') + '). ' +
+    (S.debtAll ? 'Показаны все должники.' : 'Показаны только те, кому пора напомнить: после последнего напоминания у них было занятие (занятие считается прошедшим в конце дня). Кому ещё не напоминали, тот подходит сразу.') +
+    ' Одна строка = ник, имя, месяц и сумма недоплаты за этот месяц. «Скачать Excel»: формат как в файле для бота (лист «Оплаты», колонки Ник, Имя, Месяц, Сумма). «С датами занятий» добавляет колонки «Занятий» и «Даты занятий»: это неоплаченные занятия месяца (оплата закрывает занятия по порядку, поэтому долг приходится на последние даты).</p>';
   if (D.rows.length) h += '<p style="margin:0 0 8px"><b>' + who + '</b> ' + (who === 1 ? 'получатель' : 'получателей') + ', строк в файле: <b>' + D.rows.length + '</b>, на сумму <b>' + rub(D.total) + '</b>.</p>';
-  else h += '<p style="margin:0 0 8px">Некому писать: в файл не попал ни один ученик с долгом.</p>';
+  else h += '<p style="margin:0 0 8px">' + (D.quiet.length ? 'Сейчас напоминать некому: у всех должников после последнего напоминания не было занятий.' : 'Некому писать: в файл не попал ни один ученик с долгом.') + '</p>';
   if (D.skipped.length) h += '<div class="banner warn" style="margin:8px 0"><b>Не попадут в файл (' + D.skipped.length + '):</b>' + D.skipped.map(x => '<span>' + esc(x.name) + ' — долг ' + rub(x.total) + ', ' + esc(x.why) + '</span>').join('') + '<span>Исправь ник на вкладке «Ученики» и скачай файл снова.</span></div>';
-  if (D.rows.length) h += '<details><summary style="cursor:pointer">Что попадёт в файл</summary><div class="scroll"><table><thead><tr><th class="l">Ник</th><th class="l">Имя</th><th class="l">Месяц</th><th>Сумма</th><th>Занятий</th><th class="l">Даты занятий</th></tr></thead><tbody>' +
-    D.rows.map(r => '<tr><td class="l">' + esc(r.nick) + '</td><td class="l">' + esc(r.name) + '</td><td class="l">' + esc(r.month) + '</td><td class="num">' + rub(r.sum) + '</td><td class="num">' + r.lessons + '</td><td class="l">' + esc(r.dates) + '</td></tr>').join('') + '</tbody></table></div></details>';
+  if (D.quiet.length) h += '<p class="note" style="margin:0 0 8px">Ждут следующего занятия (' + D.quiet.length + '): ' + D.quiet.map(x => esc(x.name) + ' (напоминали ' + esc(fmtDate(x.last)) + ')').join(', ') + '.</p>';
+  h += '<div class="controls" style="margin:8px 0"><button class="btn small" id="debtmark" type="button"' + (D.students.length ? '' : ' disabled') + '>Отметить как отправленные (' + D.students.length + ')</button>' +
+    '<label class="fld" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="debtall"' + (S.debtAll ? ' checked' : '') + '> Показать всех должников</label>' +
+    (Object.keys(S.reminders).length ? '<button class="btn ghost small" id="debtclear" type="button">Сбросить журнал напоминаний</button>' : '') + '</div>';
+  if (D.rows.length) h += '<details><summary style="cursor:pointer">Что попадёт в файл</summary><div class="scroll"><table><thead><tr><th class="l">Ник</th><th class="l">Имя</th><th class="l">Месяц</th><th>Сумма</th><th>Занятий</th><th class="l">Даты занятий</th><th class="l">Напоминали</th></tr></thead><tbody>' +
+    D.rows.map(r => '<tr><td class="l">' + esc(r.nick) + '</td><td class="l">' + esc(r.name) + '</td><td class="l">' + esc(r.month) + '</td><td class="num">' + rub(r.sum) + '</td><td class="num">' + r.lessons + '</td><td class="l">' + esc(r.dates) + '</td><td class="l">' + (r.last ? esc(fmtDate(r.last)) : '—') + '</td></tr>').join('') + '</tbody></table></div></details>';
   return h + '</section>';
 }
 function bindDebtCard() {
   const dl = (withDates) => () => {
     if (!window.XLSX) { setStatus('Не загрузилась библиотека для Excel. Обнови страницу.', true); return; }
-    const D = debtRows(model());
+    const D = debtRows(model(), debtOpts());
     const head = withDates ? ['Ник', 'Имя', 'Месяц', 'Сумма', 'Занятий', 'Даты занятий'] : ['Ник', 'Имя', 'Месяц', 'Сумма'];
     const aoa = [head].concat(D.rows.map(r => withDates ? [r.nick, r.name, r.month, r.sum, r.lessons, r.dates] : [r.nick, r.name, r.month, r.sum]));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -234,6 +257,25 @@ function bindDebtCard() {
   const a = $('debtdl'), b = $('debtdl2');
   if (a) a.onclick = dl(false);
   if (b) b.onclick = dl(true);
+  const all = $('debtall'); if (all) all.onchange = () => { S.debtAll = all.checked; render(); };
+  const mk = $('debtmark');
+  if (mk) mk.onclick = async () => {
+    const D = debtRows(model(), debtOpts());
+    if (!D.students.length) return;
+    if (!mk.dataset.sure) { mk.dataset.sure = '1'; mk.textContent = 'Точно? Эти ' + D.students.length + ' уйдут из списка до следующего занятия'; setTimeout(() => { if (mk.isConnected) { delete mk.dataset.sure; mk.textContent = 'Отметить как отправленные (' + D.students.length + ')'; } }, 4000); return; }
+    try {
+      const r = await api('POST', '/api/reminders/mark', { items: D.students.map(x => ({ id: x.id, date: sentDate(), sum: x.total })) });
+      S.reminders = r.reminders || {};
+      setStatus('Отмечено как отправленные: ' + r.count + '. Вернутся в список после следующего занятия.');
+      render();
+    } catch (e) { setStatus('Не удалось отметить: ' + e.message, true); }
+  };
+  const cl = $('debtclear');
+  if (cl) cl.onclick = async () => {
+    if (!cl.dataset.sure) { cl.dataset.sure = '1'; cl.textContent = 'Точно сбросить?'; setTimeout(() => { if (cl.isConnected) { delete cl.dataset.sure; cl.textContent = 'Сбросить журнал напоминаний'; } }, 3000); return; }
+    try { const r = await api('POST', '/api/reminders/clear', {}); S.reminders = r.reminders || {}; setStatus('Журнал напоминаний очищен'); render(); }
+    catch (e) { setStatus('Не удалось сбросить: ' + e.message, true); }
+  };
 }
 
 async function handleNickFile(file) {
@@ -389,7 +431,7 @@ $('loginform').addEventListener('submit', async e => {
   try { await api('POST', '/api/login', { password: $('pw').value }); $('pw').value = ''; await showApp(); }
   catch (err) { $('loginerr').textContent = err.message; }
 });
-$('logout').onclick = async () => { try { await api('POST', '/api/logout', {}); } catch (e) {} S.students = []; S.payments = []; S.ready = false; showLogin(); };
+$('logout').onclick = async () => { try { await api('POST', '/api/logout', {}); } catch (e) {} S.students = []; S.payments = []; S.reminders = {}; S.ready = false; showLogin(); };
 $('restorebtn').onclick = () => $('restorefile').click();
 $('restorefile').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;

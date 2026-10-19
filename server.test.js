@@ -71,3 +71,32 @@ test('нельзя записать без JSON и с чужой cookie', async 
     assert.equal(forged.status, 401);
   } finally { t.close(); }
 });
+
+test('журнал напоминаний: отметка, сброс, резервная копия', async () => {
+  const t = await start();
+  try {
+    const login = await fetch(t.base + '/api/login', json('POST', { password: 'secret-pass' }));
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const bad = await fetch(t.base + '/api/reminders/mark', json('POST', { items: [{ id: 'a', date: 'вчера' }] }, cookie));
+    assert.equal(bad.status, 400);
+    const ok = await (await fetch(t.base + '/api/reminders/mark', json('POST', { items: [{ id: 'a', date: '2026-10-14', sum: 5200 }, { id: 'b', date: '2026-10-15', sum: 100 }] }, cookie))).json();
+    assert.equal(ok.count, 2);
+    let st = await (await fetch(t.base + '/api/state', { headers: { Cookie: cookie } })).json();
+    assert.equal(st.reminders.a.date, '2026-10-14');
+    assert.ok(st.reminders.a.at);
+    const saved = JSON.parse(fs.readFileSync(path.join(t.dir, 'db.json'), 'utf8'));
+    assert.equal(saved.reminders.b.sum, 100);
+    const exp = await (await fetch(t.base + '/api/export', { headers: { Cookie: cookie } })).json();
+    assert.equal(Object.keys(exp.reminders).length, 2);
+    // восстановление из старой копии без журнала не стирает журнал
+    await fetch(t.base + '/api/import', json('POST', { students: sample.students, payments: sample.payments }, cookie));
+    st = await (await fetch(t.base + '/api/state', { headers: { Cookie: cookie } })).json();
+    assert.equal(Object.keys(st.reminders).length, 2);
+    await fetch(t.base + '/api/reminders/clear', json('POST', { ids: ['a'] }, cookie));
+    st = await (await fetch(t.base + '/api/state', { headers: { Cookie: cookie } })).json();
+    assert.deepEqual(Object.keys(st.reminders), ['b']);
+    await fetch(t.base + '/api/reminders/clear', json('POST', {}, cookie));
+    st = await (await fetch(t.base + '/api/state', { headers: { Cookie: cookie } })).json();
+    assert.deepEqual(st.reminders, {});
+  } finally { t.close(); }
+});

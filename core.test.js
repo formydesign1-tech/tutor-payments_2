@@ -260,3 +260,32 @@ test('debtRows: количество и даты неоплаченных зан
   assert.equal(D.rows[0].sum, 3000);
   assert.equal(D.rows[0].dates, '21.10, 26.10, 28.10');
 });
+
+/* ---------- напоминания: только те, у кого было занятие после последнего напоминания ---------- */
+test('debtRows с журналом: без нового занятия не напоминаем, после занятия снова в списке', () => {
+  // Пн и Ср, 1000 ₽, оплат нет; октябрь: Пн 5, 12, 19, 26; Ср 7, 14, 21, 28
+  const st = [Object.assign(baseSt(), { id: 'a', tg: 'anya_tg1' }), Object.assign(baseSt(), { id: 'b', name: 'Б', tg: 'boris_tg1' })];
+  const run = (day, rem) => core.debtRows(core.compute(st, [], core.dayNum(2026, 9, day), true), { reminders: rem, onlyActual: true });
+  assert.equal(run(14, {}).students.length, 2);                                   // раньше не писали: оба подходят
+  const rem = { a: { date: '2026-10-14', sum: 1, at: '' }, b: { date: '2026-10-12', sum: 1, at: '' } };
+  const d14 = run(14, rem);                                                       // у Ани после 14.10 занятий нет, у Бори была Ср 14.10
+  assert.deepEqual(d14.students.map(x => x.id), ['b']);
+  assert.deepEqual(d14.quiet.map(x => x.name), ['А']);
+  const d15 = run(15, rem);                                                       // 15.10 (Чт) занятий нет ни у кого
+  assert.deepEqual(d15.students.map(x => x.id), ['b']);
+  const d19 = run(19, Object.assign({}, rem, { b: { date: '2026-10-14', sum: 1, at: '' } }));   // 19.10 Пн: занятие у обоих
+  assert.deepEqual(d19.students.map(x => x.id).sort(), ['a', 'b']);
+  const all = core.debtRows(core.compute(st, [], core.dayNum(2026, 9, 14), true), { reminders: rem });
+  assert.equal(all.students.length, 2);                                           // без фильтра видны все должники
+});
+
+test('lessonsAfter и sanitizeReminders', () => {
+  const st = baseSt();
+  assert.equal(core.lessonsAfter(st, core.dayNum(2026, 9, 14), core.dayNum(2026, 9, 18)), 0);
+  assert.equal(core.lessonsAfter(st, core.dayNum(2026, 9, 14), core.dayNum(2026, 9, 19)), 1);
+  assert.equal(core.lessonsAfter(st, core.dayNum(2026, 9, 19), core.dayNum(2026, 9, 14)), 0);
+  const r = core.sanitizeReminders({ a: { date: '2026-10-14', sum: '5200' }, b: { date: 'вчера' }, c: null });
+  assert.deepEqual(Object.keys(r), ['a']);
+  assert.equal(r.a.sum, 5200);
+  assert.deepEqual(core.sanitizeReminders([1, 2]), {});
+});

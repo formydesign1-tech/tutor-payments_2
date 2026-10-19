@@ -84,6 +84,29 @@ function createApp({ password, dataDir, secret }) {
     res.json({ ok: true, count: students.length });
   });
 
+  // журнал напоминаний: кому и до какой даты (включительно) уже напомнили о долге
+  app.post('/api/reminders/mark', needAuth, needJson, bodyParser, async (req, res) => {
+    const items = req.body && req.body.items;
+    if (!Array.isArray(items) || !items.length || items.length > 1000) return res.status(400).json({ error: 'Некого отмечать' });
+    const at = new Date().toISOString();
+    const patch = {};
+    items.forEach(it => { if (it && typeof it.id === 'string') patch[it.id] = { date: it.date, sum: it.sum, at }; });
+    const clean = core.sanitizeReminders(patch);
+    const count = Object.keys(clean).length;
+    if (!count) return res.status(400).json({ error: 'Неверные данные' });
+    const reminders = await store.update(d => { d.reminders = Object.assign({}, d.reminders, clean); return d.reminders; });
+    res.json({ ok: true, count, reminders });
+  });
+
+  app.post('/api/reminders/clear', needAuth, needJson, bodyParser, async (req, res) => {
+    const ids = req.body && Array.isArray(req.body.ids) ? req.body.ids.filter(x => typeof x === 'string') : null;
+    const reminders = await store.update(d => {
+      if (!ids) d.reminders = {}; else { d.reminders = Object.assign({}, d.reminders); ids.forEach(i => { delete d.reminders[i]; }); }
+      return d.reminders;
+    });
+    res.json({ ok: true, reminders });
+  });
+
   app.post('/api/payments/import', needAuth, needJson, bodyParser, async (req, res) => {
     const rows = req.body && req.body.rows;
     if (!Array.isArray(rows) || !rows.length || rows.length > 20000) return res.status(400).json({ error: 'Нет платежей для загрузки' });
@@ -101,7 +124,7 @@ function createApp({ password, dataDir, secret }) {
   app.get('/api/export', needAuth, (req, res) => {
     const day = new Date().toISOString().slice(0, 10);
     res.set('Content-Disposition', `attachment; filename="uchet-oplat-${day}.json"`);
-    res.json({ students: store.data.students, payments: store.data.payments });
+    res.json({ students: store.data.students, payments: store.data.payments, reminders: store.data.reminders });
   });
 
   app.post('/api/import', needAuth, needJson, bodyParser, async (req, res) => {
@@ -110,7 +133,8 @@ function createApp({ password, dataDir, secret }) {
     const students = b.students.map(s => core.sanitizeStudent(s, newId)).filter(Boolean);
     const payments = []; const seen = new Set();
     for (const p of b.payments) { const r = core.sanitizeRow(p); if (r && !seen.has(r.id)) { seen.add(r.id); payments.push(r); } }
-    await store.update(d => { d.students = students; d.payments = payments; });
+    const reminders = b.reminders === undefined ? null : core.sanitizeReminders(b.reminders);   // в старой копии журнала нет: оставляем текущий
+    await store.update(d => { d.students = students; d.payments = payments; if (reminders) d.reminders = reminders; });
     res.json({ ok: true, students: students.length, payments: payments.length });
   });
 

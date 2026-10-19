@@ -10,7 +10,7 @@ const path = require('path');
 class JsonStore {
   constructor(file) {
     this.file = file;
-    this.data = { students: [], payments: [], rev: 0 };
+    this.data = { students: [], payments: [], reminders: {}, rev: 0 };
     this.queue = Promise.resolve();
   }
 
@@ -21,6 +21,7 @@ class JsonStore {
       this.data = {
         students: Array.isArray(parsed.students) ? parsed.students : [],
         payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+        reminders: parsed.reminders && typeof parsed.reminders === 'object' ? parsed.reminders : {},
         rev: Number(parsed.rev) || 0,
       };
     }
