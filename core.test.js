@@ -289,3 +289,43 @@ test('lessonsAfter и sanitizeReminders', () => {
   assert.equal(r.a.sum, 5200);
   assert.deepEqual(core.sanitizeReminders([1, 2]), {});
 });
+
+/* ---------- сообщение для ручной отправки ---------- */
+test('buildMessage: текст как у бота, подстановки, ссылка в Telegram', () => {
+  const p = { greet: 'Татьяна Миронова', name: 'Татьяна Миронова', today: '21.10.2026', total: 1300, lessons: 1, parts: [{ month: 'октябрь', lessons: 1, dates: '21.10' }] };
+  const m = core.buildMessage('', p);
+  assert.match(m, /^Здравствуйте! 😊\nНа сегодняшний день \(21\.10\.2026\) вы не оплатили 1 занятие на сумму 1 300 ₽\.\nДаты занятий: 21\.10\.\n/);
+  assert.match(m, /Спасибо!$/);
+  const two = core.buildMessage('{сумма} / {занятий} / {даты}', { greet: 'А', name: 'А', total: 12000, lessons: 5, parts: [{ month: 'сентябрь', lessons: 2, dates: '22.09, 29.09' }, { month: 'октябрь', lessons: 3, dates: '06.10, 13.10, 20.10' }] });
+  assert.equal(two, '12 000 ₽ / 5 / сентябрь: 22.09, 29.09; октябрь: 06.10, 13.10, 20.10');
+  const noDates = core.buildMessage('Долг: {сумма} ({даты})\nСтрока {даты}\nКонец', { greet: 'А', name: 'А', total: 500, lessons: 1, parts: [{ month: 'октябрь', lessons: 1, dates: '' }] });
+  assert.equal(noDates, 'Долг: 500 ₽\nКонец');
+  const link = core.tgLink('abcde', 'Привет\nмир & ещё');
+  assert.equal(link, 'https://t.me/abcde?text=' + encodeURIComponent('Привет\nмир & ещё'));
+  assert.ok(!link.includes(' ') && !link.includes('\n'));
+});
+
+test('debtRows.people: все должники с ником или причиной, суммы и даты по месяцам', () => {
+  const mk = (id, name, tg) => ({ id, name, start: '2026-09-01', days: 'Пн', actual: '', perWeek: 1, price: 1000, status: 'Активен', tg, tgName: '' });
+  const st = [mk('a', 'Аня', 'anya_tg1'), mk('b', 'Боря', ''), mk('c', 'Вика', 'Вика')];
+  const D = core.debtRows(core.compute(st, [], core.dayNum(2026, 9, 31), false));
+  assert.deepEqual(D.people.map(x => x.id), ['a', 'b', 'c']);
+  assert.equal(D.people[0].nick, 'anya_tg1');
+  assert.equal(D.people[1].nick, ''); assert.equal(D.people[1].why, 'нет ника');
+  assert.match(D.people[2].why, /не похож/);
+  assert.equal(D.people[0].lessons, 8);                            // сентябрь 4 + октябрь 4, оплат нет
+  assert.deepEqual(D.people[0].parts.map(x => x.month), ['сентябрь', 'октябрь']);
+  assert.equal(D.people[0].parts[1].dates, '05.10, 12.10, 19.10, 26.10');
+  assert.equal(D.people[0].total, 8000);
+});
+
+test('lessonsWord: склонение', () => {
+  assert.deepEqual([1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 111].map(core.lessonsWord), ['1 занятие', '2 занятия', '4 занятия', '5 занятий', '11 занятий', '12 занятий', '14 занятий', '21 занятие', '22 занятия', '25 занятий', '111 занятий']);
+});
+
+test('debtRows.people: дата отчёта для сообщения', () => {
+  const st = [{ id: 'a', name: 'А', start: '2026-09-01', days: 'Пн', actual: '', perWeek: 1, price: 1000, status: 'Активен', tg: 'anya_tg1', tgName: '' }];
+  const D = core.debtRows(core.compute(st, [], core.dayNum(2026, 9, 21), true));
+  assert.equal(D.people[0].today, '21.10.2026');
+  assert.match(core.buildMessage('', D.people[0]), /^Здравствуйте! 😊\nНа сегодняшний день \(21\.10\.2026\) вы не оплатили 7 занятий на сумму 7 000 ₽\./);
+});

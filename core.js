@@ -458,7 +458,7 @@ function sanitizeReminders(obj) {
 function debtRows(M, opts) {
   opts = opts || {};
   const rem = opts.reminders || {};
-  const rows = [], skipped = [], students = [], quiet = [];
+  const rows = [], skipped = [], students = [], quiet = [], people = [];
   M.rows.forEach(r => {
     if (!r.active) return;
     const items = [];
@@ -471,13 +471,42 @@ function debtRows(M, opts) {
       if (ld !== null && lessonsAfter(r.s, ld, M.repDay) === 0) { quiet.push({ name: r.s.name, total, last }); return; }
     }
     const nick = normNick(r.s.tg);
-    if (!nick) { skipped.push({ name: r.s.name, total, why: 'нет ника' }); return; }
-    if (!isNick(nick)) { skipped.push({ name: r.s.name, total, why: 'ник «' + nick + '» не похож на Telegram-ник (нужна латиница, цифры и _, от 5 символов)' }); return; }
+    const why = !nick ? 'нет ника' : (!isNick(nick) ? 'ник «' + nick + '» не похож на Telegram-ник (нужна латиница, цифры и _, от 5 символов)' : '');
+    people.push({ id: r.s.id, today: dayDMY(M.repDay), name: r.s.name, greet: (r.s.tgName || r.s.name).trim(), nick: why ? '' : nick, why, total,
+      lessons: items.reduce((a, x) => a + (r.owedLes[x.m] || 0), 0),
+      parts: items.map(x => ({ month: MONTHS[x.m].name.toLowerCase(), lessons: r.owedLes[x.m] || 0, dates: (r.owedDates[x.m] || []).map(dayDM).join(', ') })) });
+    if (why) { skipped.push({ name: r.s.name, total, why }); return; }
     students.push({ id: r.s.id, name: r.s.name, total });
     items.forEach(x => rows.push({ nick, name: (r.s.tgName || r.s.name).trim(), month: MONTHS[x.m].name.toLowerCase(), sum: x.sum, student: r.s.name, id: r.s.id, last, lessons: r.owedLes[x.m], dates: (r.owedDates[x.m] || []).map(dayDM).join(', ') }));
   });
-  return { rows, skipped, students, quiet, total: rows.reduce((a, x) => a + x.sum, 0) };
+  return { rows, skipped, students, quiet, people, total: rows.reduce((a, x) => a + x.sum, 0) };
 }
+
+/* ---------- сообщение ученику для ручной отправки ---------- */
+const DEFAULT_TEMPLATE = [
+  'Здравствуйте! 😊',
+  'На сегодняшний день ({сегодня}) вы не оплатили {занятия} на сумму {сумма}.',
+  'Даты занятий: {даты}.',
+  '',
+  'Если вы уже оплатили, напишите мне, пожалуйста, я проверю.',
+  'Если есть вопросы по сумме или датам, тоже пишите.',
+  '',
+  'Спасибо!',
+].join('\n');
+const lessonsWord = n => { const a = Math.abs(n) % 100, b = a % 10; return n + ' ' + (a > 10 && a < 20 ? 'занятий' : b === 1 ? 'занятие' : (b >= 2 && b <= 4) ? 'занятия' : 'занятий'); };
+const dayDMY = d => { const t = new Date(d * 864e5); return dayDM(d) + '.' + t.getUTCFullYear(); };
+const fmtRub = n => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+/** Подстановки: {имя} {ученик} {сумма} {занятий} (число) {занятия} (число со словом) {даты} {месяц} {сегодня} (дата отчёта). Если дат нет, строка с {даты} (или скобки вокруг неё) убирается. */
+function buildMessage(tpl, p) {
+  tpl = String(tpl || '').trim() || DEFAULT_TEMPLATE;
+  const parts = p.parts || [];
+  const withDates = parts.filter(x => x.dates);
+  const dates = withDates.length === 1 && parts.length === 1 ? withDates[0].dates : withDates.map(x => x.month + ': ' + x.dates).join('; ');
+  if (!dates) tpl = tpl.replace(/\s*\(\s*\{даты\}\s*\)/g, '').split('\n').filter(l => l.indexOf('{даты}') < 0).join('\n');
+  const val = { 'имя': p.greet, 'ученик': p.name, 'сумма': fmtRub(p.total), 'занятий': String(p.lessons), 'даты': dates, 'месяц': parts.map(x => x.month).join(', '), 'занятия': lessonsWord(p.lessons), 'сегодня': p.today || '' };
+  return tpl.replace(/\{(имя|ученик|сумма|занятий|занятия|даты|месяц|сегодня)\}/g, (m, k) => val[k]);
+}
+const tgLink = (nick, text) => 'https://t.me/' + nick + '?text=' + encodeURIComponent(text);
 
 /** Таблица «весь список учеников со всеми столбцами» + лист с изменениями расписания (для скачивания в Excel). */
 function rosterExport(M, payments) {
@@ -503,5 +532,5 @@ function rosterExport(M, payments) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { lessonsAfter, sanitizeReminders, lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
+  module.exports = { lessonsWord, DEFAULT_TEMPLATE, buildMessage, tgLink, fmtRub, lessonsAfter, sanitizeReminders, lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
 }

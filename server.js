@@ -84,6 +84,14 @@ function createApp({ password, dataDir, secret }) {
     res.json({ ok: true, count: students.length });
   });
 
+  // настройки сайта: сейчас только шаблон сообщения ученику
+  app.put('/api/settings', needAuth, needJson, bodyParser, async (req, res) => {
+    const tpl = req.body && typeof req.body.template === 'string' ? req.body.template.slice(0, 1500) : null;
+    if (tpl === null) return res.status(400).json({ error: 'Нет шаблона' });
+    const settings = await store.update(d => { d.settings = Object.assign({}, d.settings, { template: tpl }); return d.settings; });
+    res.json({ ok: true, settings });
+  });
+
   // журнал напоминаний: кому и до какой даты (включительно) уже напомнили о долге
   app.post('/api/reminders/mark', needAuth, needJson, bodyParser, async (req, res) => {
     const items = req.body && req.body.items;
@@ -124,7 +132,7 @@ function createApp({ password, dataDir, secret }) {
   app.get('/api/export', needAuth, (req, res) => {
     const day = new Date().toISOString().slice(0, 10);
     res.set('Content-Disposition', `attachment; filename="uchet-oplat-${day}.json"`);
-    res.json({ students: store.data.students, payments: store.data.payments, reminders: store.data.reminders });
+    res.json({ students: store.data.students, payments: store.data.payments, reminders: store.data.reminders, settings: store.data.settings });
   });
 
   app.post('/api/import', needAuth, needJson, bodyParser, async (req, res) => {
@@ -133,8 +141,9 @@ function createApp({ password, dataDir, secret }) {
     const students = b.students.map(s => core.sanitizeStudent(s, newId)).filter(Boolean);
     const payments = []; const seen = new Set();
     for (const p of b.payments) { const r = core.sanitizeRow(p); if (r && !seen.has(r.id)) { seen.add(r.id); payments.push(r); } }
+    const settings = b.settings && typeof b.settings.template === 'string' ? { template: b.settings.template.slice(0, 1500) } : null;
     const reminders = b.reminders === undefined ? null : core.sanitizeReminders(b.reminders);   // в старой копии журнала нет: оставляем текущий
-    await store.update(d => { d.students = students; d.payments = payments; if (reminders) d.reminders = reminders; });
+    await store.update(d => { d.students = students; d.payments = payments; if (reminders) d.reminders = reminders; if (settings) d.settings = settings; });
     res.json({ ok: true, students: students.length, payments: payments.length });
   });
 

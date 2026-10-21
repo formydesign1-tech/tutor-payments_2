@@ -100,3 +100,19 @@ test('журнал напоминаний: отметка, сброс, резе�
     assert.deepEqual(st.reminders, {});
   } finally { t.close(); }
 });
+
+test('шаблон сообщения: сохранение, резервная копия', async () => {
+  const t = await start();
+  try {
+    const login = await fetch(t.base + '/api/login', json('POST', { password: 'secret-pass' }));
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    assert.equal((await fetch(t.base + '/api/settings', json('PUT', {}, cookie))).status, 400);
+    const r = await (await fetch(t.base + '/api/settings', json('PUT', { template: 'Привет, {имя}!' }, cookie))).json();
+    assert.equal(r.settings.template, 'Привет, {имя}!');
+    const st = await (await fetch(t.base + '/api/state', { headers: { Cookie: cookie } })).json();
+    assert.equal(st.settings.template, 'Привет, {имя}!');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(t.dir, 'db.json'), 'utf8')).settings.template, 'Привет, {имя}!');
+    const exp = await (await fetch(t.base + '/api/export', { headers: { Cookie: cookie } })).json();
+    assert.equal(exp.settings.template, 'Привет, {имя}!');
+  } finally { t.close(); }
+});

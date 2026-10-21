@@ -7,7 +7,7 @@ const todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + pa
 const fmtDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '.' + m[2] + '.' + m[1] : (iso || ''); };
 const uid = () => 's' + Math.random().toString(36).slice(2, 8);
 
-const S = { students: [], payments: [], reminders: {}, debtAll: false, tab: 'summary', date: todayISO(), toDate: true, ready: false,
+const S = { students: [], payments: [], reminders: {}, settings: {}, debtAll: false, tab: 'summary', date: todayISO(), toDate: true, ready: false,
             filter: 'all', q: '', pf: 'all', pq: '', sortK: 'owedTotal', sortDir: -1, showAllPays: false, openChg: new Set() };
 try { const m = localStorage.getItem('uo-mode'); if (m === '0') S.toDate = false; } catch (e) {}
 
@@ -27,7 +27,7 @@ async function api(method, url, body) {
 
 async function loadState() {
   const d = await api('GET', '/api/state');
-  S.students = d.students || []; S.payments = d.payments || []; S.reminders = d.reminders || {}; S.ready = true;
+  S.students = d.students || []; S.payments = d.payments || []; S.reminders = d.reminders || {}; S.settings = d.settings || {}; S.ready = true;
 }
 
 async function saveRoster() {
@@ -240,8 +240,67 @@ function debtCardHTML(M) {
     (Object.keys(S.reminders).length ? '<button class="btn ghost small" id="debtclear" type="button">Сбросить журнал напоминаний</button>' : '') + '</div>';
   if (D.rows.length) h += '<details><summary style="cursor:pointer">Что попадёт в файл</summary><div class="scroll"><table><thead><tr><th class="l">Ник</th><th class="l">Имя</th><th class="l">Месяц</th><th>Сумма</th><th>Занятий</th><th class="l">Даты занятий</th><th class="l">Напоминали</th></tr></thead><tbody>' +
     D.rows.map(r => '<tr><td class="l">' + esc(r.nick) + '</td><td class="l">' + esc(r.name) + '</td><td class="l">' + esc(r.month) + '</td><td class="num">' + rub(r.sum) + '</td><td class="num">' + r.lessons + '</td><td class="l">' + esc(r.dates) + '</td><td class="l">' + (r.last ? esc(fmtDate(r.last)) : '—') + '</td></tr>').join('') + '</tbody></table></div></details>';
-  return h + '</section>';
+  return h + manualHTML(D) + '</section>';
 }
+const tplText = () => (S.settings && typeof S.settings.template === 'string' && S.settings.template.trim()) ? S.settings.template : DEFAULT_TEMPLATE;
+
+function manualHTML(D) {
+  let h = '<div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px"><h2 style="margin-bottom:6px">Написать вручную</h2>' +
+    '<p class="note" style="margin:0 0 8px">Для тех, кто не любит бота. Кнопка «Написать в Telegram» открывает чат с учеником, текст уже вставлен, остаётся нажать «Отправить». После отправки нажмите «Отправлено», и ученик уйдёт из списка до следующего занятия.</p>' +
+    '<details><summary style="cursor:pointer">Текст сообщения (можно изменить)</summary><div style="margin:8px 0"><textarea id="tpl" rows="9" style="width:100%">' + esc(tplText()) + '</textarea>' +
+    '<p class="note" style="margin:6px 0">Подстановки: {имя} (из «Имя для бота»), {ученик}, {сумма}, {занятия} (например «2 занятия»), {занятий} (только число), {даты}, {месяц}, {сегодня} (дата отчёта). Если у ученика нет дат занятий, строка с {даты} пропускается. Правки сохраняются сами.</p>' +
+    '<button class="btn ghost small" id="tplreset" type="button">Вернуть стандартный текст</button></div></details>';
+  if (!D.people.length) return h + '<p class="note" style="margin:8px 0 0">Сейчас писать некому.</p></div>';
+  h += D.people.map(p => {
+    const text = buildMessage(tplText(), p);
+    return '<div class="mrow" data-id="' + esc(p.id) + '"><div class="mwho"><b>' + esc(p.name) + '</b><span class="note"> · ' + (p.nick ? '@' + esc(p.nick) : esc(p.why)) + ' · долг ' + rub(p.total) + '</span></div>' +
+      '<div class="mtxt">' + esc(text) + '</div><div class="btns">' +
+      (p.nick ? '<a class="btn small" target="_blank" rel="noopener" href="' + esc(tgLink(p.nick, text)) + '">Написать в Telegram</a>' : '') +
+      '<button class="btn ghost small" data-copy type="button">Скопировать текст</button>' +
+      '<button class="btn ghost small" data-sent type="button">Отправлено</button></div></div>';
+  }).join('');
+  return h + '</div>';
+}
+
+async function markSent(ids) {
+  const D = debtRows(model(), debtOpts());
+  const items = D.people.filter(p => ids.includes(p.id)).map(p => ({ id: p.id, date: sentDate(), sum: p.total }));
+  if (!items.length) return;
+  const r = await api('POST', '/api/reminders/mark', { items });
+  S.reminders = r.reminders || {};
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch (e) {
+    const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (x) {} ta.remove(); return ok;
+  }
+}
+
+function bindManual() {
+  const card = $('debtcard'); if (!card) return;
+  const tpl = $('tpl');
+  if (tpl) tpl.addEventListener('change', async () => {
+    try { const r = await api('PUT', '/api/settings', { template: tpl.value }); S.settings = r.settings || {}; setStatus('Текст сохранён'); render(); }
+    catch (e) { setStatus('Не удалось сохранить текст: ' + e.message, true); }
+  });
+  const rs = $('tplreset');
+  if (rs) rs.onclick = async () => {
+    try { const r = await api('PUT', '/api/settings', { template: '' }); S.settings = r.settings || {}; setStatus('Стандартный текст возвращён'); render(); }
+    catch (e) { setStatus('Не удалось сохранить: ' + e.message, true); }
+  };
+  card.querySelectorAll('.mrow').forEach(row => {
+    const id = row.dataset.id;
+    const cp = row.querySelector('[data-copy]'), sn = row.querySelector('[data-sent]');
+    if (cp) cp.onclick = async () => { const ok = await copyText(row.querySelector('.mtxt').textContent); setStatus(ok ? 'Текст скопирован' : 'Не получилось скопировать, выделите текст вручную', !ok); };
+    if (sn) sn.onclick = async () => {
+      try { await markSent([id]); setStatus('Отмечено как отправленное'); render(); }
+      catch (e) { setStatus('Не удалось отметить: ' + e.message, true); }
+    };
+  });
+}
+
 function bindDebtCard() {
   const dl = (withDates) => () => {
     if (!window.XLSX) { setStatus('Не загрузилась библиотека для Excel. Обнови страницу.', true); return; }
@@ -257,6 +316,7 @@ function bindDebtCard() {
   const a = $('debtdl'), b = $('debtdl2');
   if (a) a.onclick = dl(false);
   if (b) b.onclick = dl(true);
+  bindManual();
   const all = $('debtall'); if (all) all.onchange = () => { S.debtAll = all.checked; render(); };
   const mk = $('debtmark');
   if (mk) mk.onclick = async () => {
@@ -431,7 +491,7 @@ $('loginform').addEventListener('submit', async e => {
   try { await api('POST', '/api/login', { password: $('pw').value }); $('pw').value = ''; await showApp(); }
   catch (err) { $('loginerr').textContent = err.message; }
 });
-$('logout').onclick = async () => { try { await api('POST', '/api/logout', {}); } catch (e) {} S.students = []; S.payments = []; S.reminders = {}; S.ready = false; showLogin(); };
+$('logout').onclick = async () => { try { await api('POST', '/api/logout', {}); } catch (e) {} S.students = []; S.payments = []; S.reminders = {}; S.settings = {}; S.ready = false; showLogin(); };
 $('restorebtn').onclick = () => $('restorefile').click();
 $('restorefile').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
