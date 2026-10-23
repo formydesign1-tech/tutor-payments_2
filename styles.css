@@ -111,3 +111,6 @@ td .chg-row input,td .chg-row select{width:auto}
 .mrow .mtxt{white-space:pre-wrap;font-size:13px;color:var(--ink2);background:var(--bg);border-radius:6px;padding:8px 10px;max-height:150px;overflow:auto}
 .mrow a.btn{text-decoration:none;display:inline-block}
 #tpl{font:400 13px/1.45 var(--f-body);color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;resize:vertical}
+
+.chg .tl{font-size:13px;color:var(--ink2);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 12px;width:100%;display:flex;flex-direction:column;gap:2px}
+.chg .tl b{color:var(--ink)}

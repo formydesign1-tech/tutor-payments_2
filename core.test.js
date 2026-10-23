@@ -329,3 +329,13 @@ test('debtRows.people: дата отчёта для сообщения', () => {
   assert.equal(D.people[0].today, '21.10.2026');
   assert.match(core.buildMessage('', D.people[0]), /^Здравствуйте! 😊\nНа сегодняшний день \(21\.10\.2026\) вы не оплатили 7 занятий на сумму 7 000 ₽\./);
 });
+
+test('describeSchedule: было 2 раза в неделю, с даты 3 раза, другие дни', () => {
+  const st = baseSt([{ kind: 'sched', from: '2026-11-03', days: 'Пн, Ср, Пт', perWeek: '', price: '' }]);
+  assert.deepEqual(core.describeSchedule(st), ['с 01.09.2026 по 02.11.2026: Пн, Ср, 2 в неделю', 'с 03.11.2026: Пн, Ср, Пт, 3 в неделю']);
+  // 3 занятия в неделю действительно считаются: ноябрь 2026, Пн 2, 9, 16, 23, 30; Ср 4, 11, 18, 25; Пт 6, 13, 20, 27 (с 3.11)
+  const NOV = { ms: core.dayNum(2026, 10, 1), me: core.dayNum(2026, 11, 0) };
+  const segs = core.buildSegments(st, [1, 0, 1, 0, 1, 0, 0]);
+  assert.equal(core.monthPlan(st, segs, NOV.ms, NOV.me).lessons, 13);   // Пн 2.11 по старому расписанию; с 3.11: Пн 9, 16, 23, 30 (4), Ср 4, 11, 18, 25 (4), Пт 6, 13, 20, 27 (4)
+  assert.deepEqual(core.describeSchedule(baseSt([{ kind: 'off', from: '2026-10-15', to: '2026-10-27' }])), ['с 01.09.2026 по 14.10.2026: Пн, Ср, 2 в неделю', 'с 15.10.2026 по 27.10.2026: не ходит', 'с 28.10.2026: Пн, Ср, 2 в неделю']);
+});

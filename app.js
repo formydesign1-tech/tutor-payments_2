@@ -355,13 +355,17 @@ async function handleNickFile(file) {
   }
 }
 
+function timelineHTML(s) {
+  const lines = describeSchedule(s);
+  return '<b>Расписание по периодам</b>' + (lines.length ? lines.map(l => '<div>' + esc(l) + '</div>').join('') : '<div>не заполнено (укажите начало, дни и занятий в неделю выше)</div>');
+}
 function chgRowHTML(c, si, ci) {
   const f = (k, cls, ph, type) => '<input class="' + cls + '" data-cf="' + k + '" ' + (type ? 'type="' + type + '" ' : '') + 'value="' + esc(c[k]) + '" placeholder="' + ph + '" aria-label="' + ph + '">';
   return '<div class="chg-row" data-si="' + si + '" data-ci="' + ci + '" data-kind="' + esc(c.kind) + '">' +
-    '<select data-cf="kind" aria-label="Что меняется"><option value="off"' + (c.kind === 'off' ? ' selected' : '') + '>Не ходит</option><option value="sched"' + (c.kind === 'sched' ? ' selected' : '') + '>Ходит по-другому</option></select>' +
+    '<select data-cf="kind" aria-label="Что меняется"><option value="off"' + (c.kind === 'off' ? ' selected' : '') + '>Не ходит</option><option value="sched"' + (c.kind === 'sched' ? ' selected' : '') + '>Другое расписание</option></select>' +
     '<label class="fld">с <input type="date" data-cf="from" value="' + esc(c.from) + '"></label>' +
     '<label class="fld">по (необязательно) <input type="date" data-cf="to" value="' + esc(c.to) + '"></label>' +
-    '<span class="sched-only">' + f('days', 'w-act', 'Дни, напр. Ср') + f('perWeek', 'w-num', 'В неделю', 'number') + f('price', 'w-num', 'Цена, ₽', 'number') + '</span>' +
+    '<span class="sched-only">' + f('days', 'w-act', 'Дни: Пн, Ср, Пт') + f('perWeek', 'w-num', 'В неделю', 'number') + f('price', 'w-num', 'Цена, ₽', 'number') + '</span>' +
     f('note', 'w-comm', 'Комментарий') +
     '<button class="btn ghost small" data-delchg type="button">Убрать</button>' +
     '<div class="chk" data-cchk>' + esc(changeCheck(c)) + '</div></div>';
@@ -369,7 +373,8 @@ function chgRowHTML(c, si, ci) {
 function chgEditorHTML(s, i) {
   const list = s.changes || [];
   return '<tr class="chgrow" data-i="' + i + '"><td colspan="14"><div class="chg"><div class="note" style="margin:0 0 8px">Изменения в расписании «' + esc(s.name) + '». Расписание выше остаётся основным: до первого изменения и после периода с датой «по» ученик занимается по нему. ' +
-    '«Не ходит»: занятий в этот период нет и платить за них не нужно. «Ходит по-другому»: впишите новые дни (напр. «Ср»), число занятий в неделю подставится само; цену заполняйте, только если она меняется. Без даты «по» изменение действует, пока не начнётся следующее.</div>' +
+    '«Не ходит»: занятий в этот период нет и платить за них не нужно. «Другое расписание»: впишите дни, в которые ученик ходит теперь (например «Пн, Ср, Пт»), число занятий в неделю посчитается само (2 дня значит 2 раза в неделю, 3 дня значит 3); цену заполняйте, только если она меняется. Без даты «по» изменение действует, пока не начнётся следующее.</div>' +
+    '<div class="tl" data-tl>' + timelineHTML(s) + '</div>' +
     list.map((c, ci) => chgRowHTML(c, i, ci)).join('') +
     '<button class="btn small" data-addchg type="button">+ Добавить изменение</button></div></td></tr>';
 }
@@ -428,7 +433,9 @@ function renderStudents(view) {
       const k = el.dataset.cf; let v = el.value;
       if (k === 'perWeek' || k === 'price') v = v === '' ? '' : Number(v);
       c[k] = v; if (k === 'kind') row.dataset.kind = v;
-      row.querySelector('[data-cchk]').textContent = changeCheck(c); scheduleRoster(); return;
+      row.querySelector('[data-cchk]').textContent = changeCheck(c);
+      const tl = row.closest('.chg').querySelector('[data-tl]'); if (tl) tl.innerHTML = timelineHTML(st);
+      scheduleRoster(); return;
     }
     const tr = el.closest('tr'); if (!tr || !el.dataset.f) return;
     const s = S.students[+tr.dataset.i]; const f = el.dataset.f;

@@ -78,7 +78,8 @@ const flagsOf = text => { const low = String(text || '').toLowerCase(); return D
  * Период длится до даты «по» или до начала следующего изменения; если «по» нет и следующего нет, то навсегда.
  */
 function buildSegments(s, baseFl) {
-  const base = { fl: baseFl, wk: safeNum(s.perWeek), price: safeNum(s.price) || 0, off: false };
+  const baseTxt = (String(s.actual || '').trim() || String(s.days || '').trim());
+  const base = { fl: baseFl, wk: safeNum(s.perWeek), price: safeNum(s.price) || 0, off: false, txt: baseTxt };
   const list = (Array.isArray(s.changes) ? s.changes : []).map(c => ({ c, f: parseISO(c.from), t: c.to ? parseISO(c.to) : null }))
     .filter(x => x.f !== null).sort((x, y) => x.f - y.f);
   const NEG = -1e9, POS = 1e9, segs = [];
@@ -89,14 +90,14 @@ function buildSegments(s, baseFl) {
     let end = (x.t !== null && x.t >= x.f) ? Math.min(x.t, next) : next;
     if (x.f > cur) segs.push(Object.assign({ a: cur, b: x.f - 1 }, base));
     let seg;
-    if (x.c.kind === 'off') seg = { off: true, fl: base.fl, wk: 0, price: base.price };
+    if (x.c.kind === 'off') seg = { off: true, fl: base.fl, wk: 0, price: base.price, txt: '' };
     else {
       const days = String(x.c.days || '').trim();
       const fl = days ? flagsOf(days) : base.fl;
       const nd = fl.reduce((p, q) => p + q, 0);
       const pw = safeNum(x.c.perWeek);
       const price = safeNum(x.c.price);
-      seg = { off: false, fl, wk: pw !== null ? pw : (days ? nd : base.wk), price: price !== null ? price : base.price };
+      seg = { off: false, fl, wk: pw !== null ? pw : (days ? nd : base.wk), price: price !== null ? price : base.price, txt: days || baseTxt };
     }
     segs.push(Object.assign({ a: x.f, b: end }, seg));
     cur = end + 1;
@@ -146,6 +147,31 @@ function describeChange(c) {
   if (safeNum(c.perWeek) !== null) parts.push(safeNum(c.perWeek) + ' зан. в неделю');
   if (safeNum(c.price) !== null) parts.push('цена ' + safeNum(c.price) + ' ₽');
   return t + (parts.join(', ') || 'расписание без изменений') + (c.note ? ' (' + c.note + ')' : '');
+}
+
+/** Расписание ученика по периодам простыми строками: «с … по …: дни, N в неделю». */
+function describeSchedule(s) {
+  const st = parseISO(s.start);
+  const segs = buildSegments(s, scheduleFlags(s));
+  const basePrice = safeNum(s.price) || 0;
+  const out = [];
+  segs.forEach(g => {
+    if (st !== null && g.b < st) return;                          // период целиком до начала занятий
+    const a = g.a < -1e8 ? (st !== null ? st : null) : g.a;
+    const from = a === null ? 'с начала занятий' : 'с ' + dayDMY(a);
+    const to = g.b > 1e8 ? '' : ' по ' + dayDMY(g.b);
+    let what;
+    if (g.off) what = 'не ходит';
+    else {
+      const parts = [];
+      if (g.txt) parts.push(g.txt);
+      if (g.wk !== null) parts.push(g.wk + ' в неделю');
+      if (g.price !== basePrice) parts.push('цена ' + g.price + ' ₽');
+      what = parts.join(', ') || 'расписание не заполнено';
+    }
+    out.push(from + to + ': ' + what);
+  });
+  return out;
 }
 
 function changeCheck(c) {
@@ -532,5 +558,5 @@ function rosterExport(M, payments) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { lessonsWord, DEFAULT_TEMPLATE, buildMessage, tgLink, fmtRub, lessonsAfter, sanitizeReminders, lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
+  module.exports = { describeSchedule, lessonsWord, DEFAULT_TEMPLATE, buildMessage, tgLink, fmtRub, lessonsAfter, sanitizeReminders, lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
 }
