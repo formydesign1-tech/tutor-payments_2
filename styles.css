@@ -114,3 +114,7 @@ td .chg-row input,td .chg-row select{width:auto}
 
 .chg .tl{font-size:13px;color:var(--ink2);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 12px;width:100%;display:flex;flex-direction:column;gap:2px}
 .chg .tl b{color:var(--ink)}
+
+.sortbtn{text-transform:inherit;letter-spacing:inherit;background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;font-weight:inherit;cursor:pointer;text-align:left}
+.sortbtn:hover{text-decoration:underline}
+.sortbtn:focus-visible{outline:2px solid var(--accent,#2563eb);outline-offset:2px;border-radius:3px}

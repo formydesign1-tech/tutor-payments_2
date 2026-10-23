@@ -7,7 +7,7 @@ const todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + pa
 const fmtDate = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? m[3] + '.' + m[2] + '.' + m[1] : (iso || ''); };
 const uid = () => 's' + Math.random().toString(36).slice(2, 8);
 
-const S = { students: [], payments: [], reminders: {}, settings: {}, debtAll: false, tab: 'summary', date: todayISO(), toDate: true, ready: false,
+const S = { students: [], payments: [], reminders: {}, settings: {}, debtAll: false, rq: '', rqRaw: '', rsort: { k: '', dir: 1 }, tab: 'summary', date: todayISO(), toDate: true, ready: false,
             filter: 'all', q: '', pf: 'all', pq: '', sortK: 'owedTotal', sortDir: -1, showAllPays: false, openChg: new Set() };
 try { const m = localStorage.getItem('uo-mode'); if (m === '0') S.toDate = false; } catch (e) {}
 
@@ -396,12 +396,43 @@ function exportStudents() {
 }
 
 /* ---------- Ученики (редактирование) ---------- */
-function renderStudents(view) {
+const ROSTER_COLS = [['Ученик', 'name'], ['Ник в Telegram', 'tg'], ['Имя для бота', 'tgName'], ['Экзамен', 'exam'], ['Начало', 'start'], ['Дни и время', ''], ['Дни, в которые ходит', ''], ['В неделю', 'perWeek'], ['Цена занятия, ₽', 'price'], ['Статус', 'status'], ['Скидка', ''], ['Комментарий', 'comment'], ['Проверка расписания', ''], ['Изменения', ''], ['', '']];
+
+function rosterHeadHTML() {
+  return '<tr>' + ROSTER_COLS.map(([n, k]) => k
+    ? '<th class="l" aria-sort="' + (S.rsort.k === k ? (S.rsort.dir > 0 ? 'ascending' : 'descending') : 'none') + '"><button data-rk="' + k + '" type="button" class="sortbtn">' + n + (S.rsort.k === k ? (S.rsort.dir > 0 ? ' ↑' : ' ↓') : '') + '</button></th>'
+    : '<th class="l">' + n + '</th>').join('') + '</tr>';
+}
+
+/** Номера учеников в S.students в порядке показа: с учётом поиска и сортировки (сам список не переставляется). */
+function rosterOrder() {
+  const q = S.rq;
+  const hay = x => [x.name, x.tg, x.tgName, x.exam, x.days, x.actual, x.comment, x.status, x.phone, x.email].join(' ').toLowerCase();
+  const idx = S.students.map((x, i) => i).filter(i => !q || hay(S.students[i]).includes(q));
+  const k = S.rsort.k, d = S.rsort.dir;
+  if (k) {
+    const num = k === 'perWeek' || k === 'price';
+    const val = x => num ? safeNum(x[k]) : String(x[k] === undefined || x[k] === null ? '' : x[k]).toLowerCase();
+    const empty = v => v === null || v === '';
+    idx.sort((a, b) => {
+      const x = val(S.students[a]), y = val(S.students[b]);
+      if (empty(x) && empty(y)) return a - b;
+      if (empty(x)) return 1;
+      if (empty(y)) return -1;
+      const c = num ? x - y : String(x).localeCompare(String(y), 'ru');
+      return c ? c * d : a - b;
+    });
+  }
+  return idx;
+}
+
+function rosterRowsHTML() {
   const M = model(); const byName = new Map(M.rows.map(r => [r.s.id, r]));
-  let h = '<section class="card"><div class="chart-head"><h2>Список учеников и расписание</h2><span class="btns"><button class="btn ghost small" id="exportst" type="button">Скачать список (Excel)</button> <button class="btn ghost small" id="nickbtn" type="button">Загрузить ники из списка</button> <button class="btn small" id="addst" type="button">+ Добавить ученика</button></span></div>' +
-    '<p class="note" style="margin:0 0 10px">Правки сохраняются сами. План платежей считается по дате начала, дням недели и числу занятий в неделю. Если ученик ходит не во все дни из расписания, впиши реальные дни в колонку «Дни, в которые ходит».</p><div class="scroll"><table id="rt"><thead><tr>' +
-    ['Ученик', 'Ник в Telegram', 'Имя для бота', 'Экзамен', 'Начало', 'Дни и время', 'Дни, в которые ходит', 'В неделю', 'Цена занятия, ₽', 'Статус', 'Скидка', 'Комментарий', 'Проверка расписания', 'Изменения', ''].map((n, i) => '<th class="l">' + n + '</th>').join('') + '</tr></thead><tbody>';
-  S.students.forEach((s, i) => {
+  const order = rosterOrder();
+  if (!order.length) return '<tr><td colspan="' + ROSTER_COLS.length + '" style="text-align:center;color:var(--muted)">Никого не найдено</td></tr>';
+  let h = '';
+  order.forEach(i => {
+    const s = S.students[i];
     const r = byName.get(s.id);
     h += '<tr data-i="' + i + '"><td class="l"><input class="w-name" data-f="name" value="' + esc(s.name) + '" aria-label="Ученик"></td>' +
       '<td class="l"><input class="w-act" data-f="tg" value="' + esc(s.tg) + '" placeholder="без @" aria-label="Ник в Telegram"></td>' +
@@ -420,11 +451,33 @@ function renderStudents(view) {
       '<td class="l"><button class="btn ghost small" data-del type="button" aria-label="Удалить ученика">Удалить</button></td></tr>';
     if (S.openChg.has(s.id)) h += chgEditorHTML(s, i);
   });
-  h += '</tbody></table></div></section>';
+  return h;
+}
+
+function drawRosterBody() {
+  const tb = document.querySelector('#rt tbody'); if (!tb) return;
+  tb.innerHTML = rosterRowsHTML();
+  document.querySelector('#rt thead').innerHTML = rosterHeadHTML();
+  const c = $('rcount'); if (c) c.textContent = (S.rq ? 'Найдено ' + rosterOrder().length + ' из ' + S.students.length : 'Учеников: ' + S.students.length);
+}
+
+function renderStudents(view) {
+  let h = '<section class="card"><div class="chart-head"><h2>Список учеников и расписание</h2><span class="btns"><button class="btn ghost small" id="exportst" type="button">Скачать список (Excel)</button> <button class="btn ghost small" id="nickbtn" type="button">Загрузить ники из списка</button> <button class="btn small" id="addst" type="button">+ Добавить ученика</button></span></div>' +
+    '<p class="note" style="margin:0 0 10px">Правки сохраняются сами. План платежей считается по дате начала, дням недели и числу занятий в неделю. Если ученик ходит не во все дни из расписания, впиши реальные дни в колонку «Дни, в которые ходит». Нажмите на заголовок колонки, чтобы отсортировать список (повторное нажатие меняет направление, третье снимает сортировку).</p>' +
+    '<div class="controls"><input type="search" id="rq" placeholder="Найти по имени, нику, экзамену, комментарию" aria-label="Найти ученика" value="' + esc(S.rqRaw) + '"><span class="note" id="rcount"></span></div>' +
+    '<div class="scroll"><table id="rt"><thead></thead><tbody></tbody></table></div></section>';
   view.innerHTML = h;
+  drawRosterBody();
+  $('rq').addEventListener('input', e => { S.rqRaw = e.target.value; S.rq = e.target.value.trim().toLowerCase(); drawRosterBody(); });
+  $('rt').querySelector('thead').addEventListener('click', e => {
+    const b = e.target.closest('[data-rk]'); if (!b) return;
+    const k = b.dataset.rk;
+    if (S.rsort.k !== k) S.rsort = { k, dir: 1 }; else if (S.rsort.dir > 0) S.rsort = { k, dir: -1 }; else S.rsort = { k: '', dir: 1 };
+    drawRosterBody();
+  });
   $('nickbtn').onclick = () => $('nickfile').click();
   $('exportst').onclick = exportStudents;
-  $('addst').onclick = () => { S.students.push({ id: uid(), name: 'Новый ученик', exam: '', start: '', days: '', actual: '', perWeek: '', price: 1300, status: 'Активен', comment: '', tg: '', tgName: '', changes: [] }); scheduleRoster(); renderStudents(view); const rows = view.querySelectorAll('#rt tbody tr'); const last = rows[rows.length - 1]; if (last) { const inp = last.querySelector('input'); inp.focus(); inp.select(); } };
+  $('addst').onclick = () => { S.rq = ''; S.rqRaw = ''; S.rsort = { k: '', dir: 1 }; S.students.push({ id: uid(), name: 'Новый ученик', exam: '', start: '', days: '', actual: '', perWeek: '', price: 1300, status: 'Активен', comment: '', tg: '', tgName: '', changes: [] }); scheduleRoster(); renderStudents(view); const rows = view.querySelectorAll('#rt tbody tr'); const last = rows[rows.length - 1]; if (last) { const inp = last.querySelector('input'); inp.focus(); inp.select(); } };
   const tb = view.querySelector('#rt tbody');
   tb.addEventListener('change', e => {
     const el = e.target;
