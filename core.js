@@ -508,6 +508,39 @@ function debtRows(M, opts) {
   return { rows, skipped, students, quiet, people, total: rows.reduce((a, x) => a + x.sum, 0) };
 }
 
+/* ---------- итог по напоминаниям: кто оплатил после того, как я напомнила ---------- */
+/** Момент отправки в виде «ГГГГ-ММ-ДД ЧЧ:ММ:СС» в часовом поясе tzMin (минуты к UTC), как в выгрузке Tilda. Нет времени: начало дня даты напоминания. */
+function reminderCutoff(rem, tzMin) {
+  const t = rem && rem.at ? Date.parse(rem.at) : NaN;
+  if (isNaN(t)) return (rem && rem.date ? rem.date : '') + ' 00:00:00';
+  const d = new Date(t + (tzMin || 0) * 60000), p = n => String(n).padStart(2, '0');
+  return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
+}
+/**
+ * Для каждого ученика из журнала напоминаний (за последние opts.days дней): что оплатил после напоминания и сколько долга осталось сейчас.
+ * status: closed (платёж был, долга нет), partial (платёж был, долг остался), unpaid (платежей нет, долг есть), gone (платежей нет, но долга уже нет: поменялось расписание или статус).
+ */
+function reminderOutcomes(M, payments, reminders, opts) {
+  opts = opts || {};
+  const days = opts.days || 30, now = opts.now || Date.now(), tz = opts.tzMin || 0;
+  const debtOf = new Map();
+  M.rows.forEach(r => { let s = 0; if (r.active) for (let m = 0; m <= M.repIdx && m < NM; m++) s += r.owedR[m] || 0; debtOf.set(r.s.id, { debt: s, name: r.s.name }); });
+  const out = [];
+  Object.keys(reminders || {}).forEach(id => {
+    const rem = reminders[id], st = debtOf.get(id); if (!rem || !st) return;
+    const at = rem.at ? Date.parse(rem.at) : parseISO(rem.date) * 864e5;
+    if (isNaN(at) || now - at > days * 864e5) return;
+    const cut = reminderCutoff(rem, tz);
+    const paid = (payments || []).filter(p => isPaidRow(p) && p.n === st.name && String(p.c) >= cut).sort((a, b) => String(a.c) < String(b.c) ? -1 : 1);
+    const sum = paid.reduce((a, p) => a + (safeNum(p.am) || 0), 0);
+    const status = paid.length ? (st.debt > 0 ? 'partial' : 'closed') : (st.debt > 0 ? 'unpaid' : 'gone');
+    out.push({ id, name: st.name, status, remindedOn: rem.date, wasOwed: rem.sum || 0, paid: sum, paidDates: paid.map(p => String(p.c).slice(8, 10) + '.' + String(p.c).slice(5, 7)), debt: st.debt });
+  });
+  const rank = { unpaid: 0, partial: 1, gone: 2, closed: 3 };
+  out.sort((a, b) => rank[a.status] - rank[b.status] || a.name.localeCompare(b.name, 'ru'));
+  return out;
+}
+
 /* ---------- сообщение ученику для ручной отправки ---------- */
 const DEFAULT_TEMPLATE = [
   'Здравствуйте! 😊',
@@ -558,5 +591,5 @@ function rosterExport(M, payments) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { describeSchedule, lessonsWord, DEFAULT_TEMPLATE, buildMessage, tgLink, fmtRub, lessonsAfter, sanitizeReminders, lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
+  module.exports = { reminderOutcomes, reminderCutoff, describeSchedule, lessonsWord, DEFAULT_TEMPLATE, buildMessage, tgLink, fmtRub, lessonsAfter, sanitizeReminders, lessonDays, dayDM, buildSegments, monthPlan, describeChange, changeCheck, sanitizeChange, rosterExport, matchRoster, debtRows, normNick, normName, isNick, compute, parseProduct, rowsFromMatrix, parseCSV, applyImport, sanitizeRow, sanitizeStudent, dayNum, monthIdx, MONTHS, scheduleCheck, normDate, safeNum, STATUSES };
 }

@@ -27,7 +27,7 @@ async function api(method, url, body) {
 
 async function loadState() {
   const d = await api('GET', '/api/state');
-  S.students = d.students || []; S.payments = d.payments || []; S.reminders = d.reminders || {}; S.settings = d.settings || {}; S.ready = true;
+  S.students = d.students || []; S.payments = d.payments || []; S.reminders = d.reminders || {}; S.settings = d.settings || {}; S.storage = d.storage || null; S.ready = true;
 }
 
 async function saveRoster() {
@@ -58,6 +58,25 @@ async function readFile(file) {
   return parseCSV(text);
 }
 
+/** Итог по напоминаниям: кто из тех, кому я напомнила, оплатил после этого. Показывается после загрузки выгрузки. */
+function outcomesHTML() {
+  const list = reminderOutcomes(model(), S.payments, S.reminders, { tzMin: -new Date().getTimezoneOffset() });
+  if (!list.length) return '';
+  const g = k => list.filter(x => x.status === k);
+  const paidN = g('closed').length + g('partial').length;
+  const dm = x => fmtDate(x).slice(0, 5);
+  const days = x => x.paidDates.length > 3 ? x.paidDates.slice(0, 3).join(', ') + '…' : x.paidDates.join(', ');
+  const line = (title, arr, f) => arr.length ? '<span><b>' + title + ' (' + arr.length + '):</b> ' + arr.map(x => esc(x.name) + ' — ' + f(x)).join('; ') + '.</span>' : '';
+  const dates = list.map(x => x.remindedOn).sort();
+  return '<div class="banner"><b>Итог по напоминаниям: из ' + list.length + ' оплатили ' + paidN + '</b>' +
+    '<span style="color:var(--muted)">Учитываются платежи после отправки напоминания (напоминала с ' + dm(dates[0]) + ' по ' + dm(dates[dates.length - 1]) + ').</span>' +
+    line('Не оплатили', g('unpaid'), x => 'долг ' + rub(x.debt) + ', напомнила ' + dm(x.remindedOn)) +
+    line('Оплатили частично', g('partial'), x => rub(x.paid) + ' (' + days(x) + '), осталось ' + rub(x.debt)) +
+    line('Закрыли долг', g('closed'), x => rub(x.paid) + ' (' + days(x) + ')') +
+    line('Платежа не было, но долга уже нет (проверь расписание и статус)', g('gone'), x => 'напоминала на ' + rub(x.wasOwed)) +
+    '</div>';
+}
+
 async function handleFile(file) {
   if (!file) return;
   $('notice').innerHTML = '';
@@ -68,9 +87,9 @@ async function handleFile(file) {
     if (rosterDirty) { clearTimeout(rosterTimer); await saveRoster(); }
     const m = await api('POST', '/api/payments/import', { rows: res.rows });
     await loadState();
-    let html = '<div class="banner ok"><b>Выгрузка загружена</b><span>Добавлено новых платежей: ' + m.added + ', обновлено: ' + m.updated + ', уже были: ' + m.same + (res.skipped ? '. Пропущено строк без paymentid (оплата не прошла): ' + res.skipped : '') + '.</span>';
+    let html = '<div class="banner ok"><b>Выгрузка загружена</b><span>Добавлено новых платежей: ' + m.added + ', обновлено: ' + m.updated + ', уже были: ' + m.same + '. Всего платежей на сайте: ' + S.payments.length + (res.skipped ? '. Пропущено строк без paymentid (оплата не прошла): ' + res.skipped : '') + '.</span>';
     if (m.fresh.length) html += '<span>Новые ученики (' + m.fresh.length + '): ' + m.fresh.map(esc).join(', ') + '. Заполни им начало занятий, дни и занятий в неделю на вкладке «Ученики», иначе план по ним не посчитается.</span>';
-    html += '</div>';
+    html += '</div>' + outcomesHTML();
     $('notice').innerHTML = html;
     if (m.fresh.length) S.tab = 'students';
     syncTabs(); render();
@@ -210,15 +229,21 @@ function drawStudents(M, dm) {
 const debtOpts = () => ({ reminders: S.reminders, onlyActual: !S.debtAll });
 const sentDate = () => { const t = todayISO(); return S.date > t ? t : S.date; };    // напоминание не может быть «из будущего»
 
+function storageWarnHTML() {
+  const st = S.storage; if (!S.ready || !st || st.safe) return '';
+  return '<div class="banner err"><b>Данные хранятся не на постоянном диске</b><span>' + (st.onRailway ? 'Railway стирает файлы сервиса при каждой пересборке, поэтому платежи и ученики пропадут после следующего деплоя. ' : '') + 'Подключи Volume: Railway → сервис → Settings → Volumes → New Volume, путь монтирования <b>/data</b>, а в Variables задай <b>DATA_DIR=/data</b>. Пока этого нет, после каждого изменения скачивай резервную копию внизу страницы.</span></div>';
+}
+
 function renderRemind() {
   const el = $('remind'); if (!el) return;
-  if (!S.ready || !S.students.length) { el.innerHTML = ''; return; }
+  const warn = storageWarnHTML();
+  if (!S.ready || !S.students.length) { el.innerHTML = warn; return; }
   const D = debtRows(model(), { reminders: S.reminders, onlyActual: true });
   const n = D.students.length + D.skipped.length;
-  if (!n) { el.innerHTML = ''; return; }
+  if (!n) { el.innerHTML = warn; return; }
   const names = D.students.map(x => x.name).concat(D.skipped.map(x => x.name));
   const sum = D.students.reduce((a, x) => a + x.total, 0) + D.skipped.reduce((a, x) => a + x.total, 0);
-  el.innerHTML = '<div class="banner warn"><b>Пора напомнить о долге: ' + n + ' ' + (n === 1 ? 'ученику' : 'ученикам') + ', на сумму ' + rub(sum) + '</b><span>' + names.slice(0, 8).map(esc).join(', ') + (names.length > 8 ? ' и ещё ' + (names.length - 8) : '') + '. После последнего напоминания у них было занятие.</span><span><button class="btn small" id="remgo" type="button">Открыть выгрузку</button></span></div>';
+  el.innerHTML = warn + '<div class="banner warn"><b>Пора напомнить о долге: ' + n + ' ' + (n === 1 ? 'ученику' : 'ученикам') + ', на сумму ' + rub(sum) + '</b><span>' + names.slice(0, 8).map(esc).join(', ') + (names.length > 8 ? ' и ещё ' + (names.length - 8) : '') + '. После последнего напоминания у них было занятие.</span><span><button class="btn small" id="remgo" type="button">Открыть выгрузку</button></span></div>';
   $('remgo').onclick = () => { S.tab = 'summary'; syncTabs(); render(); const c = $('debtcard'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 }
 

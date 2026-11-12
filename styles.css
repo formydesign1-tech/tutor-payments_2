@@ -118,3 +118,4 @@ td .chg-row input,td .chg-row select{width:auto}
 .sortbtn{text-transform:inherit;letter-spacing:inherit;background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;font-weight:inherit;cursor:pointer;text-align:left}
 .sortbtn:hover{text-decoration:underline}
 .sortbtn:focus-visible{outline:2px solid var(--accent,#2563eb);outline-offset:2px;border-radius:3px}
+#notice .banner+.banner{margin-top:10px}

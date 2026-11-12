@@ -339,3 +339,39 @@ test('describeSchedule: было 2 раза в неделю, с даты 3 ра�
   assert.equal(core.monthPlan(st, segs, NOV.ms, NOV.me).lessons, 13);   // Пн 2.11 по старому расписанию; с 3.11: Пн 9, 16, 23, 30 (4), Ср 4, 11, 18, 25 (4), Пт 6, 13, 20, 27 (4)
   assert.deepEqual(core.describeSchedule(baseSt([{ kind: 'off', from: '2026-10-15', to: '2026-10-27' }])), ['с 01.09.2026 по 14.10.2026: Пн, Ср, 2 в неделю', 'с 15.10.2026 по 27.10.2026: не ходит', 'с 28.10.2026: Пн, Ср, 2 в неделю']);
 });
+
+test('reminderOutcomes: закрыл долг / частично / не оплатил / долга уже нет', () => {
+  const M0 = core.compute(sample.students, sample.payments, REPORT_DAY, true);
+  const D = core.debtRows(M0);
+  assert.ok(D.people.length >= 3);
+  const [a, b, c] = D.people;
+  const rem = {};
+  [a, b, c].forEach(p => { rem[p.id] = { date: '2026-10-10', sum: p.total, at: '2026-10-10T09:00:00.000Z' }; });
+  const prod = n => 'Оплата уроков (Тип занятий: Абонемент ' + n + ' занятий , Месяц: Октябрь 2026) - 1x' + (1300 * n) + ' = ' + (1300 * n);
+  const pay = (name, n, c, id) => ({ id, c, n: name, pa: '', em: '', ph: '', pr: prod(n), am: 1300 * n, pm: 1300 * n, di: null, pc: '', ok: 1 });
+  const pays = sample.payments.concat([
+    pay(a.name, a.lessons, '2026-10-10 15:30:00', 'x1'),               // после напоминания (12:00 по +03), полностью
+    pay(b.name, 1, '2026-10-11 10:00:00', 'x2'),                       // после, но только одно занятие
+    pay(c.name, c.lessons, '2026-10-10 11:00:00', 'x3'),               // ДО напоминания, не считается
+  ]);
+  const M = core.compute(sample.students, pays, REPORT_DAY, true);
+  const now = Date.parse('2026-10-12T00:00:00Z');
+  const out = core.reminderOutcomes(M, pays, rem, { now, tzMin: 180 });
+  const by = Object.fromEntries(out.map(x => [x.name, x]));
+  assert.equal(by[a.name].status, 'closed');
+  assert.equal(by[a.name].paid, 1300 * a.lessons);
+  assert.deepEqual(by[a.name].paidDates, ['10.10']);
+  assert.equal(by[b.name].status, b.lessons > 1 ? 'partial' : 'closed');
+  assert.equal(by[c.name].paid, 0);                                    // платёж до напоминания не засчитан
+  assert.equal(by[c.name].wasOwed, c.total);
+  assert.equal(out[0].status === 'unpaid' || out[0].status === 'partial' || out[0].status === 'gone', true);   // сначала те, кто не оплатил
+  // давнее напоминание выпадает из списка
+  assert.equal(core.reminderOutcomes(M, pays, rem, { now: Date.parse('2026-12-31T00:00:00Z'), tzMin: 180 }).length, 0);
+  // ученик удалён: пропускаем
+  assert.equal(core.reminderOutcomes(M, pays, { nobody: rem[a.id] }, { now }).length, 0);
+});
+
+test('reminderCutoff: время напоминания в часовом поясе Tilda, без времени берётся начало дня', () => {
+  assert.equal(core.reminderCutoff({ date: '2026-10-10', at: '2026-10-10T21:30:00.000Z' }, 180), '2026-10-11 00:30:00');
+  assert.equal(core.reminderCutoff({ date: '2026-10-10', at: '' }, 180), '2026-10-10 00:00:00');
+});
