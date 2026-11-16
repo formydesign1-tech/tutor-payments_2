@@ -137,23 +137,27 @@ test('sanitizeStudent сохраняет ник и имя для бота', () =
   assert.equal(core.sanitizeStudent({ name: 'Б' }, () => 'y').tg, '');
 });
 
-test('debtRows: только активные должники, по строке на месяц, без ника — в пропущенных', () => {
+test('debtRows: только активные должники, по строке на месяц, без ника тоже попадают в файл (ник пустой)', () => {
   const mk = (id, name, tg, status) => ({ id, name, start: '2026-09-01', days: 'Пн', actual: '', perWeek: 1, price: 1000, status: status || 'Активен', tg: tg || '', tgName: '' });
   const st = [mk('a', 'Аня', 'anya_tg1'), mk('b', 'Боря', ''), mk('c', 'Вика', 'Вика'), mk('d', 'Глеб', 'gleb_tg1', 'Пауза'), mk('e', 'Дима', 'dima_tg1')];
   st[0].tgName = 'Анна';
   const pay = [{ id: '1', c: '2026-09-01 10:00:00', n: 'Дима', pr: 'Оплата уроков (Тип занятий: Абонемент 12 занятий , Месяц: Сентябрь 2026) - 1x12000 = 12000', am: 12000, pm: 12000, di: null, pc: '', ok: 1 }];
   const M = core.compute(st, pay, core.dayNum(2026, 9, 31), false);   // конец октября: сентябрь 4 + октябрь 4 урока
   const D = core.debtRows(M);
-  assert.deepEqual(D.rows.map(r => [r.nick, r.name, r.month, r.sum]), [['anya_tg1', 'Анна', 'сентябрь', 4000], ['anya_tg1', 'Анна', 'октябрь', 4000]]);
-  assert.equal(D.total, 8000);
-  assert.deepEqual(D.skipped.map(x => x.name), ['Боря', 'Вика']);    // без ника и «не-ник»; Глеб на паузе, Дима оплатил
+  assert.deepEqual(D.rows.map(r => [r.nick, r.name, r.month, r.sum]), [
+    ['anya_tg1', 'Анна', 'сентябрь', 4000], ['anya_tg1', 'Анна', 'октябрь', 4000],
+    ['', 'Боря', 'сентябрь', 4000], ['', 'Боря', 'октябрь', 4000],     // без ника
+    ['', 'Вика', 'сентябрь', 4000], ['', 'Вика', 'октябрь', 4000]]);   // «не-ник» тоже не передаём как ник
+  assert.equal(D.total, 24000);
+  assert.deepEqual(D.students.map(x => x.name), ['Аня', 'Боря', 'Вика']);   // все должники отмечаются как отправленные; Глеб на паузе, Дима оплатил
+  assert.deepEqual(D.noNick.map(x => x.name), ['Боря', 'Вика']);
 });
 
 test('debtRows на реальных данных: сумма строк = «Нужно доплатить» активных учеников с ником', () => {
   const st = sample.students.map((s, i) => Object.assign({}, s, { tg: 'student_' + String(i).padStart(3, '0') }));
   const M = core.compute(st, sample.payments, REPORT_DAY, true);
   const D = core.debtRows(M);
-  assert.equal(D.skipped.length, 0);
+  assert.equal(D.noNick.length, 0);
   assert.equal(D.total, M.kpi.owed);
   assert.ok(D.rows.every(r => r.sum > 0));
 });

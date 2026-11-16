@@ -239,17 +239,17 @@ function renderRemind() {
   const warn = storageWarnHTML();
   if (!S.ready || !S.students.length) { el.innerHTML = warn; return; }
   const D = debtRows(model(), { reminders: S.reminders, onlyActual: true });
-  const n = D.students.length + D.skipped.length;
+  const n = D.students.length;
   if (!n) { el.innerHTML = warn; return; }
-  const names = D.students.map(x => x.name).concat(D.skipped.map(x => x.name));
-  const sum = D.students.reduce((a, x) => a + x.total, 0) + D.skipped.reduce((a, x) => a + x.total, 0);
+  const names = D.students.map(x => x.name);
+  const sum = D.students.reduce((a, x) => a + x.total, 0);
   el.innerHTML = warn + '<div class="banner warn"><b>Пора напомнить о долге: ' + n + ' ' + (n === 1 ? 'ученику' : 'ученикам') + ', на сумму ' + rub(sum) + '</b><span>' + names.slice(0, 8).map(esc).join(', ') + (names.length > 8 ? ' и ещё ' + (names.length - 8) : '') + '. После последнего напоминания у них было занятие.</span><span><button class="btn small" id="remgo" type="button">Открыть выгрузку</button></span></div>';
   $('remgo').onclick = () => { S.tab = 'summary'; syncTabs(); render(); const c = $('debtcard'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 }
 
 function debtCardHTML(M) {
   const D = debtRows(M, debtOpts()), ri = M.repIdx;
-  const who = new Set(D.rows.map(r => r.nick)).size;
+  const who = new Set(D.rows.map(r => r.id)).size;
   const dis = D.rows.length ? '' : ' disabled';
   let h = '<section class="card" id="debtcard"><div class="chart-head"><h2>Выгрузка должников для бота</h2><span class="btns"><button class="btn ghost small" id="debtdl2" type="button"' + dis + '>Скачать с датами занятий</button> <button class="btn small" id="debtdl" type="button"' + dis + '>Скачать Excel</button></span></div>';
   if (ri < 0) return h + '<p class="note" style="margin:0">Дата отчёта раньше начала учёта, долгов нет.</p></section>';
@@ -258,7 +258,7 @@ function debtCardHTML(M) {
     ' Одна строка = ник, имя, месяц и сумма недоплаты за этот месяц. «Скачать Excel»: формат как в файле для бота (лист «Оплаты», колонки Ник, Имя, Месяц, Сумма). «С датами занятий» добавляет колонки «Занятий» и «Даты занятий»: это неоплаченные занятия месяца (оплата закрывает занятия по порядку, поэтому долг приходится на последние даты).</p>';
   if (D.rows.length) h += '<p style="margin:0 0 8px"><b>' + who + '</b> ' + (who === 1 ? 'получатель' : 'получателей') + ', строк в файле: <b>' + D.rows.length + '</b>, на сумму <b>' + rub(D.total) + '</b>.</p>';
   else h += '<p style="margin:0 0 8px">' + (D.quiet.length ? 'Сейчас напоминать некому: у всех должников после последнего напоминания не было занятий.' : 'Некому писать: в файл не попал ни один ученик с долгом.') + '</p>';
-  if (D.skipped.length) h += '<div class="banner warn" style="margin:8px 0"><b>Не попадут в файл (' + D.skipped.length + '):</b>' + D.skipped.map(x => '<span>' + esc(x.name) + ' — долг ' + rub(x.total) + ', ' + esc(x.why) + '</span>').join('') + '<span>Исправь ник на вкладке «Ученики» и скачай файл снова.</span></div>';
+  if (D.noNick.length) h += '<p class="note" style="margin:0 0 8px">Без ника (' + D.noNick.length + '): ' + D.noNick.map(x => esc(x.name)).join(', ') + '. Они тоже в файле, в колонке «Ник» у них пусто: бот найдёт их по имени. Если ник есть, впиши его на вкладке «Ученики».</p>';
   if (D.quiet.length) h += '<p class="note" style="margin:0 0 8px">Ждут следующего занятия (' + D.quiet.length + '): ' + D.quiet.map(x => esc(x.name) + ' (напоминали ' + esc(fmtDate(x.last)) + ')').join(', ') + '.</p>';
   h += '<div class="controls" style="margin:8px 0"><button class="btn small" id="debtmark" type="button"' + (D.students.length ? '' : ' disabled') + '>Отметить как отправленные (' + D.students.length + ')</button>' +
     '<label class="fld" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="debtall"' + (S.debtAll ? ' checked' : '') + '> Показать всех должников</label>' +

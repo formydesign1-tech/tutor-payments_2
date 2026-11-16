@@ -484,7 +484,7 @@ function sanitizeReminders(obj) {
 function debtRows(M, opts) {
   opts = opts || {};
   const rem = opts.reminders || {};
-  const rows = [], skipped = [], students = [], quiet = [], people = [];
+  const rows = [], noNick = [], students = [], quiet = [], people = [];
   M.rows.forEach(r => {
     if (!r.active) return;
     const items = [];
@@ -501,11 +501,11 @@ function debtRows(M, opts) {
     people.push({ id: r.s.id, today: dayDMY(M.repDay), name: r.s.name, greet: (r.s.tgName || r.s.name).trim(), nick: why ? '' : nick, why, total,
       lessons: items.reduce((a, x) => a + (r.owedLes[x.m] || 0), 0),
       parts: items.map(x => ({ month: MONTHS[x.m].name.toLowerCase(), lessons: r.owedLes[x.m] || 0, dates: (r.owedDates[x.m] || []).map(dayDM).join(', ') })) });
-    if (why) { skipped.push({ name: r.s.name, total, why }); return; }
+    if (why) noNick.push({ name: r.s.name, total, why });          // ник не нужен: бот найдёт ученика по имени, в колонке «Ник» будет пусто
     students.push({ id: r.s.id, name: r.s.name, total });
-    items.forEach(x => rows.push({ nick, name: (r.s.tgName || r.s.name).trim(), month: MONTHS[x.m].name.toLowerCase(), sum: x.sum, student: r.s.name, id: r.s.id, last, lessons: r.owedLes[x.m], dates: (r.owedDates[x.m] || []).map(dayDM).join(', ') }));
+    items.forEach(x => rows.push({ nick: why ? '' : nick, name: (r.s.tgName || r.s.name).trim(), month: MONTHS[x.m].name.toLowerCase(), sum: x.sum, student: r.s.name, id: r.s.id, last, lessons: r.owedLes[x.m], dates: (r.owedDates[x.m] || []).map(dayDM).join(', ') }));
   });
-  return { rows, skipped, students, quiet, people, total: rows.reduce((a, x) => a + x.sum, 0) };
+  return { rows, noNick, students, quiet, people, total: rows.reduce((a, x) => a + x.sum, 0) };
 }
 
 /* ---------- итог по напоминаниям: кто оплатил после того, как я напомнила ---------- */
